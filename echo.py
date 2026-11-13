@@ -19,9 +19,11 @@ Usage
 import argparse
 import json
 import math
+import os
 import random
 import shutil
 import sys
+import time
 from collections import Counter
 
 import chess
@@ -180,27 +182,61 @@ def book_key(board: chess.Board) -> str:
 # ----------------------------------------------------------------------------
 # Learning
 # ----------------------------------------------------------------------------
-def read_games(pgn_path, player):
+def classify_speed(time_control):
+    """Lichess-style speed class from a TimeControl header such as '300+3'."""
+    try:
+        base, inc = str(time_control).split("+")
+        est = int(base) + 40 * int(inc)
+    except ValueError:
+        return None
+    if est < 180:
+        return "bullet"
+    if est < 480:
+        return "blitz"
+    if est < 1500:
+        return "rapid"
+    return "classical"
+
+
+def read_games(pgn_path, player, speeds=None, min_opp_rating=None):
+    """Return ([(game, your_color)], skipped_count) for games played by `player`."""
     name = player.lower()
-    games = []
+    games, skipped = [], 0
     with open(pgn_path, encoding="utf-8", errors="ignore") as fh:
         while True:
             game = chess.pgn.read_game(fh)
             if game is None:
                 break
-            white, black = game.headers.get("White", "").lower(), game.headers.get("Black", "").lower()
+            h = game.headers
+            white, black = h.get("White", "").lower(), h.get("Black", "").lower()
             if name == white:
-                games.append((game, chess.WHITE))
+                me = chess.WHITE
             elif name == black:
-                games.append((game, chess.BLACK))
-    return games
+                me = chess.BLACK
+            else:
+                continue
+            if h.get("Variant", "Standard") not in ("Standard", "From Position"):
+                skipped += 1   # chess960, crazyhouse, etc. would break move parsing
+                continue
+            if speeds and classify_speed(h.get("TimeControl")) not in speeds:
+                skipped += 1
+                continue
+            if min_opp_rating:
+                opp = h.get("BlackElo" if me == chess.WHITE else "WhiteElo", "")
+                if not opp.isdigit() or int(opp) < min_opp_rating:
+                    skipped += 1
+                    continue
+            games.append((game, me))
+    return games, skipped
 
 
 def learn(args):
-    games = read_games(args.pgn, args.player)
+    speeds = set(args.speed.split(",")) if args.speed else None
+    games, skipped = read_games(args.pgn, args.player, speeds, args.min_opp_rating)
     if not games:
-        sys.exit(f"No games found for player '{args.player}'. Check the name matches the PGN headers.")
-    print(f"Found {len(games)} games. Reading your positions...")
+        sys.exit(f"No usable games found for player '{args.player}'. "
+                 f"Check the name matches the PGN headers (and your filters).")
+    print(f"Found {len(games)} games ({skipped} skipped by filters). Reading your positions...")
 
     per_game, book = [], {}
     played_sum = np.zeros(len(FEATURES))
@@ -228,15 +264,26 @@ def learn(args):
     train = [s for g in per_game[:len(per_game) - n_val] for s in g]
     val = [s for g in per_game[len(per_game) - n_val:] for s in g] if n_val else []
     print(f"{n_pos} positions ({len(train)} train / {len(val)} held-out).")
-    if len(train) < 2000:
+    if len(train) < 2000 and not args.resume:
         print("Note: under ~2000 positions (roughly 60+ games) the net will mostly memorize. More games help.")
 
-    net = StyleNet()
-    best, best_params = float("inf"), net.params()
+    old = None
+    if args.resume:
+        net, old = load_model(args.resume)
+        if old["player"].lower() != args.player.lower():
+            sys.exit(f"{args.resume} was trained for '{old['player']}', not '{args.player}'.")
+        lr0 = args.lr * 0.5
+        print(f"Resuming from {args.resume} ({old['games']} games, {old['positions']} positions).")
+    else:
+        net, lr0 = StyleNet(), args.lr
+
+    ev0 = net.evaluate(val) if (old and val) else None
+    best = ev0["loss"] if ev0 else float("inf")
+    best_params = net.params()
     for epoch in range(args.epochs):
         random.shuffle(train)
-        lr = args.lr / (1 + 0.15 * epoch)
-        tl = sum(net.step(s, lr) for s in train) / len(train)
+        lr = lr0 / (1 + 0.15 * epoch)
+        tl = sum(net.step(s, lr) for s in train) / max(1, len(train))
         ev = net.evaluate(val)
         score = ev["loss"] if ev else tl
         msg = f"  epoch {epoch + 1:>2}/{args.epochs}  train loss {tl:.3f}"
@@ -247,13 +294,24 @@ def learn(args):
             best, best_params = score, net.params()
     net.load_params(best_params)
 
-    final = net.evaluate(val)
+    # Merge with the old model's statistics when resuming
+    total = n_pos
+    if old:
+        total += old["positions"]
+        played_sum = played_sum + np.array([old["played_rate"][n] for n in FEATURES]) * old["positions"]
+        base_sum = base_sum + np.array([old["baseline_rate"][n] for n in FEATURES]) * old["positions"]
+        for key, counts in old["book"].items():
+            for uci, c in counts.items():
+                book.setdefault(key, Counter())[uci] += c
+
     meta = {
-        "player": args.player, "games": len(games), "positions": n_pos,
-        "played_rate": dict(zip(FEATURES, (played_sum / n_pos).tolist())),
-        "baseline_rate": dict(zip(FEATURES, (base_sum / n_pos).tolist())),
+        "player": args.player,
+        "games": len(games) + (old["games"] if old else 0),
+        "positions": total,
+        "played_rate": dict(zip(FEATURES, (played_sum / total).tolist())),
+        "baseline_rate": dict(zip(FEATURES, (base_sum / total).tolist())),
         "book": {k: dict(v) for k, v in book.items()},
-        "validation": final,
+        "validation": net.evaluate(val) or (old or {}).get("validation"),
     }
     np.savez_compressed(args.out, meta=json.dumps(meta), **net.params())
     print(f"\nSaved style model to {args.out}")
@@ -480,6 +538,9 @@ def main():
     l.add_argument("--out", default="style.npz")
     l.add_argument("--epochs", type=int, default=12)
     l.add_argument("--lr", type=float, default=0.02)
+    l.add_argument("--speed", help="only use these speeds, comma separated: bullet,blitz,rapid,classical")
+    l.add_argument("--min-opp-rating", type=int, help="only use games against opponents rated at least this")
+    l.add_argument("--resume", help="continue training an existing style.npz with new games")
     l.set_defaults(fn=learn)
 
     pr = sub.add_parser("profile", help="show your style profile and accuracy")
