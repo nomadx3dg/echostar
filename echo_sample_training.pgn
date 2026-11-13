@@ -1,0 +1,29 @@
+[Event "ECHO Sample Training Game"]
+[Site "Local"]
+[Date "2026.11.13"]
+[Round "1"]
+[White "ECHO-Example"]
+[Black "Human-Example"]
+[Result "1-0"]
+[Termination "Checkmate"]
+[Annotator "ECHO demo"]
+[Opening "Scholar's Mate"]
+
+1. e4 {White claims central space.} e5 {Black contests the center.}
+2. Qh5 {An early queen sortie; it creates a direct threat but can be risky.} Nc6
+3. Bc4 {White adds pressure to f7.} Nf6??
+4. Qxf7# {Checkmate. White wins. The final move is forced mate in this position.} 1-0
+
+[Event "ECHO Sample Training Game"]
+[Site "Local"]
+[Date "2026.11.13"]
+[Round "2"]
+[White "Human-Example"]
+[Black "ECHO-Example"]
+[Result "0-1"]
+[Termination "Checkmate"]
+[Annotator "ECHO demo"]
+[Opening "Fool's Mate"]
+
+1. f3 {White weakens the king's diagonal.} e5
+2. g4?? {A serious weakening move.} Qh4# {Black delivers checkmate. Black wins.} 0-1
