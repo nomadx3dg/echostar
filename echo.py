@@ -349,10 +349,11 @@ def profile(args):
 
 class StyleBrain:
     def __init__(self, path=None):
-        self.net, self.book = None, {}
+        self.net, self.book, self.player = None, {}, "You"
         if path:
             self.net, meta = load_model(path)
             self.book = meta.get("book", {})
+            self.player = meta["player"]
 
     def scores(self, board, moves):
         if self.net is None:
@@ -380,6 +381,16 @@ class Echo:
     def __init__(self, engine, brain, dial="balanced", depth=14, multipv=8, verbose=False):
         self.engine, self.brain = engine, brain
         self.dial, self.depth, self.multipv, self.verbose = DIALS[dial], depth, multipv, verbose
+        self.history = []   # (matched engine best?, centipawns given up) per move
+
+    def summary(self):
+        if not self.history:
+            return ""
+        n = len(self.history)
+        matched = sum(1 for m, _ in self.history if m)
+        cost = sum(c for _, c in self.history) / n
+        return (f"Echo matched the engine's top move {matched}/{n} times and gave up "
+                f"{cost:.0f} centipawns per move on average to stay in your style.")
 
     def candidates(self, board):
         infos = self.engine.analyse(board, chess.engine.Limit(depth=self.depth), multipv=self.multipv)
@@ -417,11 +428,13 @@ class Echo:
 
         for _, move, cp in ranked:
             if move == best_move or self.verify(board, move) >= best_cp - band - GATE_SLACK:
+                self.history.append((move == best_move, best_cp - cp))
                 if self.verbose:
                     print(f"   [coach] {len(safe)}/{len(cands)} moves were safe | "
                           f"engine best {board.san(best_move)} ({best_cp / 100:+.2f}) | "
                           f"Echo plays {board.san(move)} ({cp / 100:+.2f})")
                 return move
+        self.history.append((True, 0))
         return best_move
 
 
@@ -484,11 +497,27 @@ def find_stockfish(path):
     return found
 
 
+def save_game(board, white, black, directory):
+    """Write the finished (or abandoned) game as PGN so `learn --resume` can study it."""
+    import datetime
+    game = chess.pgn.Game.from_board(board)
+    game.headers.update({"Event": "Echo practice game", "Site": "Local",
+                         "Date": datetime.date.today().strftime("%Y.%m.%d"),
+                         "White": white, "Black": black, "Result": board.result()})
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, time.strftime("echo_%Y%m%d_%H%M%S.pgn"))
+    with open(path, "w") as fh:
+        print(game, file=fh, end="\n\n")
+    return path
+
+
 def play(args):
     brain = StyleBrain(args.style)
     if not args.style:
         print("No style file given: Echo will play as a plain engine.")
     engine = chess.engine.SimpleEngine.popen_uci(find_stockfish(args.stockfish))
+    opts = {"Threads": args.threads, "Hash": args.hash}
+    engine.configure({k: v for k, v in opts.items() if v and k in engine.options})
     echo = Echo(engine, brain, args.dial, args.depth, verbose=args.show)
     human = chess.WHITE if args.color == "white" else chess.BLACK
     board, last = chess.Board(), None
@@ -524,6 +553,11 @@ def play(args):
                 last = move
         print(render(board, human, last, color=not args.plain), "\nResult:", board.result())
     finally:
+        if args.show and echo.summary():
+            print(echo.summary())
+        if not args.no_save and board.move_stack:
+            white, black = (brain.player, "Echo") if human == chess.WHITE else ("Echo", brain.player)
+            print("Game saved to", save_game(board, white, black, args.save_dir))
         engine.quit()
 
 
@@ -555,6 +589,10 @@ def main():
     g.add_argument("--stockfish", help="path to the Stockfish binary")
     g.add_argument("--show", action="store_true", help="coach view: engine best vs Echo's pick")
     g.add_argument("--plain", action="store_true", help="plain ASCII board (no colors/unicode)")
+    g.add_argument("--threads", type=int, help="Stockfish threads")
+    g.add_argument("--hash", type=int, help="Stockfish hash size in MB")
+    g.add_argument("--save-dir", default="games", help="where finished games are saved as PGN")
+    g.add_argument("--no-save", action="store_true", help="don't save the game")
     g.set_defaults(fn=play)
 
     args = p.parse_args()
