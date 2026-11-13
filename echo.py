@@ -325,15 +325,45 @@ def load_model(path):
     return net, json.loads(str(d["meta"]))
 
 
+def tendency_rows(meta):
+    rows = [(meta["played_rate"][n] - meta["baseline_rate"][n], n) for n in FEATURES]
+    return sorted(rows, key=lambda r: -abs(r[0]))
+
+
+def repertoire(meta):
+    """Most common opening moves from the book: [(label, 'Nf3 (4x), d4 (2x)')]."""
+    book = meta.get("book", {})
+
+    def top(board, n=3):
+        counts = book.get(book_key(board), {})
+        ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:n]
+        return ", ".join(f"{board.san(chess.Move.from_uci(u))} ({c}x)" for u, c in ranked)
+
+    lines = []
+    first = top(chess.Board())
+    if first:
+        lines.append(("As White, first move", first))
+    for uci in ("e2e4", "d2d4", "c2c4", "g1f3"):
+        board = chess.Board()
+        mv = chess.Move.from_uci(uci)
+        label = board.san(mv)
+        board.push(mv)
+        reply = top(board)
+        if reply:
+            lines.append((f"As Black vs {label}", reply))
+    return lines
+
+
 def print_profile(meta):
     print(f"\nStyle profile for {meta['player']} ({meta['games']} games, {meta['positions']} positions)")
     print("Tendency = how much more (or less) you pick this kind of move than a random legal move.\n")
-    rows = [(meta["played_rate"][n] - meta["baseline_rate"][n], n) for n in FEATURES]
-    rows.sort(key=lambda r: -abs(r[0]))
-    for diff, n in rows[:10]:
+    for diff, n in tendency_rows(meta)[:10]:
         print(f"  {'+' if diff > 0 else '-'} {n:<24} you {meta['played_rate'][n]:5.1%}  "
               f"vs random {meta['baseline_rate'][n]:5.1%}")
+    reps = repertoire(meta)
     print(f"\n  Opening book: {len(meta['book'])} positions from your games")
+    for label, text in reps:
+        print(f"    {label}: {text}")
     v = meta.get("validation")
     if v:
         print(f"\n  Accuracy on games it never trained on:")
@@ -343,8 +373,32 @@ def print_profile(meta):
         print("\n  Accuracy: not measured (need 10+ games to hold some out).")
 
 
+def export_markdown(meta):
+    out = [f"# Style profile: {meta['player']}", "",
+           f"{meta['games']} games, {meta['positions']} positions.", "",
+           "## Tendencies", "",
+           "| Move type | You | Random legal move | Difference |", "|---|---|---|---|"]
+    for diff, n in tendency_rows(meta):
+        out.append(f"| {n} | {meta['played_rate'][n]:.1%} | {meta['baseline_rate'][n]:.1%} | {diff:+.1%} |")
+    out += ["", "## Opening repertoire", ""]
+    out += [f"- **{label}:** {text}" for label, text in repertoire(meta)] or ["No opening data."]
+    v = meta.get("validation")
+    out += ["", "## Accuracy", ""]
+    if v:
+        out += [f"- Exact move predicted: {v['top1']:.1%} (random guessing {v['random_top1']:.1%})",
+                f"- Your move in top 3: {v['top3']:.1%}"]
+    else:
+        out.append("Not measured (needs 10+ games to hold some out).")
+    return "\n".join(out) + "\n"
+
+
 def profile(args):
-    print_profile(load_model(args.style)[1])
+    meta = load_model(args.style)[1]
+    print_profile(meta)
+    if args.export:
+        with open(args.export, "w") as fh:
+            fh.write(export_markdown(meta))
+        print(f"\nReadable summary written to {args.export}")
 
 
 class StyleBrain:
@@ -579,6 +633,7 @@ def main():
 
     pr = sub.add_parser("profile", help="show your style profile and accuracy")
     pr.add_argument("style")
+    pr.add_argument("--export", metavar="FILE", help="also write a readable markdown summary")
     pr.set_defaults(fn=profile)
 
     g = sub.add_parser("play", help="play a game against Echo")
