@@ -118,11 +118,11 @@ def move_index(board: chess.Board, move: chess.Move) -> int:
 
 
 class StyleNet:
-    def __init__(self, rng=None):
+    def __init__(self, rng=None, hidden=HIDDEN):
         rng = rng or np.random.default_rng(0)
-        self.W1 = rng.normal(0, 0.05, (768, HIDDEN))
-        self.b1 = np.zeros(HIDDEN)
-        self.W2T = rng.normal(0, 0.02, (4096, HIDDEN))   # one row per from-to move
+        self.W1 = rng.normal(0, 0.05, (768, hidden))
+        self.b1 = np.zeros(hidden)
+        self.W2T = rng.normal(0, 0.02, (4096, hidden))   # one row per from-to move
         self.b2 = np.zeros(4096)
         self.w = np.zeros(len(FEATURES))
 
@@ -231,6 +231,8 @@ def read_games(pgn_path, player, speeds=None, min_opp_rating=None):
 
 
 def learn(args):
+    if not os.path.exists(args.pgn):
+        sys.exit(f"PGN file not found: {args.pgn}")
     speeds = set(args.speed.split(",")) if args.speed else None
     games, skipped = read_games(args.pgn, args.player, speeds, args.min_opp_rating)
     if not games:
@@ -319,10 +321,39 @@ def learn(args):
 
 
 def load_model(path):
+    if not os.path.exists(path):
+        sys.exit(f"Style file not found: {path}. Create one first with: python echo.py learn <games.pgn> --player <name>")
     d = np.load(path, allow_pickle=False)
-    net = StyleNet()
+    net = StyleNet(hidden=d["W1"].shape[1])
     net.load_params({k: d[k] for k in ("W1", "b1", "W2T", "b2", "w")})
     return net, json.loads(str(d["meta"]))
+
+
+# ----------------------------------------------------------------------------
+# Portable model format for the Rust port (see docs/FORMAT.md)
+# ----------------------------------------------------------------------------
+FORMAT_MAGIC = b"ECHOSTYL"
+FORMAT_VERSION = 1
+
+
+def export_echo(net, meta, path):
+    """Write weights + metadata in a dependency-free binary format: magic, version, JSON, f32 tensors."""
+    header = dict(meta)
+    header["dims"] = {"input": 768, "hidden": int(net.W1.shape[1]), "moves": 4096, "features": len(FEATURES)}
+    header["feature_names"] = FEATURES
+    blob = json.dumps(header).encode("utf-8")
+    with open(path, "wb") as fh:
+        fh.write(FORMAT_MAGIC)
+        fh.write(np.array([FORMAT_VERSION, len(blob)], dtype="<u4").tobytes())
+        fh.write(blob)
+        for name in ("W1", "b1", "W2T", "b2", "w"):
+            fh.write(np.ascontiguousarray(getattr(net, name), dtype="<f4").tobytes())
+
+
+def export_cmd(args):
+    net, meta = load_model(args.style)
+    export_echo(net, meta, args.out)
+    print(f"Wrote {args.out} ({os.path.getsize(args.out) / 1e6:.1f} MB) for the Rust engine.")
 
 
 def tendency_rows(meta):
@@ -428,13 +459,15 @@ DIALS = {
     "sharp": {"band": 20, "temp": 0.0},
 }
 GATE_SLACK = 40
+MAX_GATE_CHECKS = 3   # re-verify at most this many style picks before trusting the engine
 MATE = 100000
 
 
 class Echo:
     def __init__(self, engine, brain, dial="balanced", depth=14, multipv=8, verbose=False):
         self.engine, self.brain = engine, brain
-        self.dial, self.depth, self.multipv, self.verbose = DIALS[dial], depth, multipv, verbose
+        self.dial = dict(DIALS[dial]) if isinstance(dial, str) else dict(dial)
+        self.depth, self.multipv, self.verbose = depth, multipv, verbose
         self.history = []   # (matched engine best?, centipawns given up) per move
 
     def summary(self):
@@ -446,22 +479,26 @@ class Echo:
         return (f"Echo matched the engine's top move {matched}/{n} times and gave up "
                 f"{cost:.0f} centipawns per move on average to stay in your style.")
 
-    def candidates(self, board):
-        infos = self.engine.analyse(board, chess.engine.Limit(depth=self.depth), multipv=self.multipv)
+    def candidates(self, board, movetime=None):
+        limit = chess.engine.Limit(time=movetime * 0.5) if movetime else chess.engine.Limit(depth=self.depth)
+        infos = self.engine.analyse(board, limit, multipv=self.multipv)
         return [(i["pv"][0], i["score"].pov(board.turn).score(mate_score=MATE)) for i in infos if "pv" in i]
 
-    def verify(self, board, move):
+    def verify(self, board, move, movetime=None):
         """Blunder gate: deeper search after the move, from the mover's point of view."""
         mover = board.turn
+        limit = (chess.engine.Limit(time=max(0.02, movetime * 0.15)) if movetime
+                 else chess.engine.Limit(depth=self.depth + 6))
         board.push(move)
         try:
-            info = self.engine.analyse(board, chess.engine.Limit(depth=self.depth + 6))
+            info = self.engine.analyse(board, limit)
             return info["score"].pov(mover).score(mate_score=MATE)
         finally:
             board.pop()
 
-    def choose(self, board):
-        cands = self.candidates(board)
+    def choose(self, board, movetime=None):
+        """Pick a move. `movetime` (seconds) switches from fixed depth to a time budget."""
+        cands = self.candidates(board, movetime)
         best_move, best_cp = cands[0]
         band = self.dial["band"]
         if best_cp >= MATE - 1000:
@@ -480,8 +517,13 @@ class Echo:
         else:
             ranked = sorted(scored, key=lambda t: -t[0])
 
+        checks = 0
         for _, move, cp in ranked:
-            if move == best_move or self.verify(board, move) >= best_cp - band - GATE_SLACK:
+            if move != best_move:
+                if checks >= MAX_GATE_CHECKS:
+                    break                  # out of budget: fall back to the engine's best
+                checks += 1
+            if move == best_move or self.verify(board, move, movetime) >= best_cp - band - GATE_SLACK:
                 self.history.append((move == best_move, best_cp - cp))
                 if self.verbose:
                     print(f"   [coach] {len(safe)}/{len(cands)} moves were safe | "
@@ -551,13 +593,14 @@ def find_stockfish(path):
     return found
 
 
-def save_game(board, white, black, directory):
+def save_game(board, white, black, directory, result=None):
     """Write the finished (or abandoned) game as PGN so `learn --resume` can study it."""
     import datetime
     game = chess.pgn.Game.from_board(board)
     game.headers.update({"Event": "Echo practice game", "Site": "Local",
                          "Date": datetime.date.today().strftime("%Y.%m.%d"),
-                         "White": white, "Black": black, "Result": board.result()})
+                         "White": white, "Black": black,
+                         "Result": result or board.result(claim_draw=True)})
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, time.strftime("echo_%Y%m%d_%H%M%S.pgn"))
     with open(path, "w") as fh:
@@ -572,18 +615,40 @@ def play(args):
     engine = chess.engine.SimpleEngine.popen_uci(find_stockfish(args.stockfish))
     opts = {"Threads": args.threads, "Hash": args.hash}
     engine.configure({k: v for k, v in opts.items() if v and k in engine.options})
-    echo = Echo(engine, brain, args.dial, args.depth, verbose=args.show)
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+    dial = dict(DIALS[args.dial])
+    if args.band is not None:
+        dial["band"] = args.band
+    if args.temp is not None:
+        dial["temp"] = args.temp
+    echo = Echo(engine, brain, dial, args.depth, verbose=args.show)
     human = chess.WHITE if args.color == "white" else chess.BLACK
-    board, last = chess.Board(), None
-    print(f"Echo ({args.dial}) vs you. Moves in SAN (e4, Nf3) or UCI (e2e4). 'undo' takes back a move, 'quit' stops.\n")
+    board, last, result = chess.Board(), None, None
+    print(f"Echo ({args.dial}, band {dial['band']} cp) vs you. Moves in SAN (e4, Nf3) or UCI (e2e4).")
+    print("Commands: undo, hint, resign, help, quit.\n")
 
     try:
-        while not board.is_game_over():
+        while not board.is_game_over(claim_draw=True):
             print(render(board, human, last, color=not args.plain), "\n")
             if board.turn == human:
                 text = input("Your move: ").strip()
                 if text in ("quit", "q"):
                     break
+                if text == "help":
+                    print("Enter a move like e4, Nf3, O-O, e8=Q (or e2e4). undo = take back your last move,\n"
+                          "hint = ask the engine for its best move, resign = give up, quit = stop and save.\n")
+                    continue
+                if text == "resign":
+                    result = "0-1" if human == chess.WHITE else "1-0"
+                    print("You resigned.")
+                    break
+                if text == "hint":
+                    info = engine.analyse(board, chess.engine.Limit(depth=min(args.depth, 12)))
+                    print(f"Engine suggests {board.san(info['pv'][0])} "
+                          f"({info['score'].pov(board.turn).score(mate_score=MATE) / 100:+.2f})\n")
+                    continue
                 if text == "undo" and len(board.move_stack) >= 2:
                     board.pop(); board.pop()
                     last = board.peek() if board.move_stack else None
@@ -601,17 +666,22 @@ def play(args):
                 board.push(move)
                 last = move
             else:
-                move = echo.choose(board)
+                try:
+                    move = echo.choose(board, args.movetime)
+                except (chess.engine.EngineError, chess.engine.EngineTerminatedError) as exc:
+                    print(f"The engine stopped responding ({exc}). Saving the game so far.")
+                    break
                 print(f"Echo plays {board.san(move)}\n")
                 board.push(move)
                 last = move
-        print(render(board, human, last, color=not args.plain), "\nResult:", board.result())
+        print(render(board, human, last, color=not args.plain), "\nResult:",
+              result or board.result(claim_draw=True))
     finally:
         if args.show and echo.summary():
             print(echo.summary())
         if not args.no_save and board.move_stack:
             white, black = (brain.player, "Echo") if human == chess.WHITE else ("Echo", brain.player)
-            print("Game saved to", save_game(board, white, black, args.save_dir))
+            print("Game saved to", save_game(board, white, black, args.save_dir, result))
         engine.quit()
 
 
@@ -641,6 +711,10 @@ def main():
     g.add_argument("--dial", choices=list(DIALS), default="balanced")
     g.add_argument("--color", choices=["white", "black"], default="white", help="your color")
     g.add_argument("--depth", type=int, default=14)
+    g.add_argument("--movetime", type=float, help="seconds per move (overrides --depth)")
+    g.add_argument("--band", type=int, help="custom safety band in centipawns (overrides the dial)")
+    g.add_argument("--temp", type=float, help="custom style temperature, 0 = always the most 'you' safe move")
+    g.add_argument("--seed", type=int, help="random seed, for reproducible games")
     g.add_argument("--stockfish", help="path to the Stockfish binary")
     g.add_argument("--show", action="store_true", help="coach view: engine best vs Echo's pick")
     g.add_argument("--plain", action="store_true", help="plain ASCII board (no colors/unicode)")
@@ -649,6 +723,11 @@ def main():
     g.add_argument("--save-dir", default="games", help="where finished games are saved as PGN")
     g.add_argument("--no-save", action="store_true", help="don't save the game")
     g.set_defaults(fn=play)
+
+    ex = sub.add_parser("export", help="convert a style.npz to the .echo format used by the Rust engine")
+    ex.add_argument("style")
+    ex.add_argument("--out", default="style.echo")
+    ex.set_defaults(fn=export_cmd)
 
     args = p.parse_args()
     args.fn(args)

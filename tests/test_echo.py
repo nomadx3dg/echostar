@@ -193,3 +193,51 @@ def test_save_game_roundtrip(tmp_path):
         game = chess.pgn.read_game(fh)
     assert game.headers["White"] == "Me" and game.headers["Black"] == "Echo"
     assert [m.uci() for m in game.mainline_moves()] == ["e2e4"]
+
+
+# ---------------------------------------------------------------- polish additions
+def test_custom_dial_dict_and_movetime():
+    bot = echo.Echo(FakeEngine({"e2e4": 50, "d2d4": 45}), StubBrain({"d2d4": 5.0}), {"band": 20, "temp": 0.0})
+    assert bot.choose(chess.Board(), movetime=1.0).uci() == "d2d4"
+
+
+def test_gate_checks_are_capped():
+    # five safe moves, style ranks the engine's best last and every deep check fails -> at most 3 verifications
+    cps = {"e2e4": 50, "d2d4": 49, "c2c4": 48, "g1f3": 47, "b1c3": 46}
+    deep = {u: -500 for u in cps if u != "e2e4"}
+    calls = []
+
+    class CountingEngine(FakeEngine):
+        def analyse(self, board, limit, multipv=None):
+            if not multipv:
+                calls.append(board.peek().uci())
+            return super().analyse(board, limit, multipv)
+
+    bot = echo.Echo(CountingEngine(cps, deep), StubBrain({"d2d4": 5, "c2c4": 4, "g1f3": 3, "b1c3": 2}),
+                    {"band": 100, "temp": 0.0})
+    assert bot.choose(chess.Board()).uci() == "e2e4"
+    assert len(calls) == echo.MAX_GATE_CHECKS
+
+
+def test_resign_result_is_saved(tmp_path):
+    board = chess.Board()
+    board.push_san("e4")
+    path = echo.save_game(board, "Me", "Echo", str(tmp_path), result="0-1")
+    with open(path) as fh:
+        assert chess.pgn.read_game(fh).headers["Result"] == "0-1"
+
+
+def test_export_echo_format(tmp_path):
+    import json
+    import struct
+    net = echo.StyleNet(hidden=8)
+    meta = {"player": "Me", "games": 1, "positions": 1, "book": {}}
+    path = tmp_path / "m.echo"
+    echo.export_echo(net, meta, str(path))
+    data = path.read_bytes()
+    assert data[:8] == echo.FORMAT_MAGIC
+    version, json_len = struct.unpack("<II", data[8:16])
+    header = json.loads(data[16:16 + json_len])
+    assert version == 1 and header["dims"]["hidden"] == 8
+    floats = (768 * 8) + 8 + (4096 * 8) + 4096 + len(echo.FEATURES)
+    assert len(data) == 16 + json_len + 4 * floats
