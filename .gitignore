@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
 *.npz
+/style.echo
+/games.pgn
 stockfish/
 games/
 rust/target/

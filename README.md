@@ -157,6 +157,7 @@ pip install -r requirements-dev.txt
 make test                # Python and Rust
 ```
 Or run them separately: `python -m pytest` and `cargo test --manifest-path rust/Cargo.toml`.
+`make lint` runs clippy on the Rust code, the same check CI uses.
 
 ## Honest limits
 

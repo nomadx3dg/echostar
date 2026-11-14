@@ -1,4 +1,4 @@
-.PHONY: test python-test rust-test rust golden clean
+.PHONY: test python-test rust-test lint rust golden clean
 
 test: python-test rust-test
 
@@ -7,6 +7,9 @@ python-test:
 
 rust-test:
 	cargo test --manifest-path rust/Cargo.toml
+
+lint:
+	cargo clippy --locked --all-targets --manifest-path rust/Cargo.toml -- -D warnings
 
 rust:
 	cargo build --release --manifest-path rust/Cargo.toml

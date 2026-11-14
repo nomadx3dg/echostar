@@ -6,7 +6,7 @@ Status key: done / next / later. Each milestone has an exit test so "done" is ch
 
 ## M0. Python prototype (done)
 Style net + hand-made features, safety band, blunder gate, terminal play, learning loop (`learn --resume`),
-profile export, 23 tests.
+profile export, and tests that run without Stockfish.
 **Exit test:** `python -m pytest` passes; a full game against Stockfish works.
 
 ## M1. Rust port (done)
