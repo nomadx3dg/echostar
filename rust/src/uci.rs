@@ -87,7 +87,8 @@ pub fn parse_go(tokens: &[&str]) -> Go {
     let mut g = Go::default();
     let mut i = 0;
     while i < tokens.len() {
-        let val = tokens.get(i + 1).and_then(|v| v.parse::<u64>().ok());
+        // Some GUIs send a negative clock once a player is behind; treat it as "no time left", not "no clock".
+        let val = tokens.get(i + 1).and_then(|v| v.parse::<i64>().ok()).map(|v| v.max(0) as u64);
         match tokens[i] {
             "wtime" => g.wtime = val,
             "btime" => g.btime = val,
@@ -118,6 +119,23 @@ pub fn plan_time(g: &Go, side: Color) -> Option<f64> {
     let moves = g.movestogo.unwrap_or(30).max(1) as f64;
     let budget = (t / moves + inc * 0.7).min(t * 0.25);
     Some((budget * 0.8).max(0.05))
+}
+
+/// Apply a UCI `setoption` to the config. Returns false for options Echo doesn't own (Ponder, Move Overhead, ...),
+/// which must not restart Stockfish in the middle of a game.
+pub fn apply_option(cfg: &mut Config, name: &str, value: &str) -> bool {
+    let empty = value.is_empty() || value == "<empty>";
+    match name {
+        "StylePath" => cfg.style = if empty { None } else { Some(value.to_string()) },
+        "StockfishPath" => cfg.stockfish = if empty { None } else { Some(value.to_string()) },
+        "Dial" => cfg.dial = value.to_string(),
+        "Band" => cfg.band = value.parse::<i32>().ok().filter(|b| *b >= 0),
+        "Depth" => cfg.depth = value.parse().unwrap_or(cfg.depth),
+        "Threads" => cfg.threads = value.parse().ok(),
+        "Hash" => cfg.hash = value.parse().ok(),
+        _ => return false,
+    }
+    true
 }
 
 pub fn parse_position(tokens: &[&str]) -> Result<Chess, String> {
@@ -184,18 +202,9 @@ pub fn run(mut cfg: Config) -> Result<(), String> {
                 if let Some(n) = name_at {
                     let name = tokens[n + 1..value_at.unwrap_or(tokens.len())].join(" ");
                     let value = value_at.map(|v| tokens[v + 1..].join(" ")).unwrap_or_default();
-                    let empty = value.is_empty() || value == "<empty>";
-                    match name.as_str() {
-                        "StylePath" => cfg.style = if empty { None } else { Some(value) },
-                        "StockfishPath" => cfg.stockfish = if empty { None } else { Some(value) },
-                        "Dial" => cfg.dial = value,
-                        "Band" => cfg.band = value.parse::<i32>().ok().filter(|b| *b >= 0),
-                        "Depth" => cfg.depth = value.parse().unwrap_or(cfg.depth),
-                        "Threads" => cfg.threads = value.parse().ok(),
-                        "Hash" => cfg.hash = value.parse().ok(),
-                        _ => {} // options meant for other engines (Move Overhead, Ponder, ...) are ignored
+                    if apply_option(&mut cfg, &name, &value) {
+                        echo = None; // rebuild with the new settings at the next isready/go
                     }
-                    echo = None; // rebuild with the new settings at the next isready/go
                 }
             }
             Some("ucinewgame") => pos = Chess::default(),
@@ -266,6 +275,29 @@ mod tests {
         assert!(plan_time(&low, Color::White).unwrap() <= 0.1);
         assert_eq!(plan_time(&parse_go(&["depth", "8"]), Color::White), None);
         assert!((plan_time(&parse_go(&["movetime", "1000"]), Color::Black).unwrap() - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn negative_clocks_mean_no_time_left() {
+        let g = parse_go(&["wtime", "-250", "btime", "1000"]);
+        assert_eq!((g.wtime, g.btime), (Some(0), Some(1000)));
+        assert_eq!(plan_time(&g, Color::White), Some(0.05)); // minimum slice, not a fixed-depth search
+    }
+
+    #[test]
+    fn options_update_the_config_and_foreign_ones_are_ignored() {
+        let mut cfg = Config::default();
+        assert!(apply_option(&mut cfg, "Dial", "sharp"));
+        assert_eq!(cfg.dial, "sharp");
+        assert!(apply_option(&mut cfg, "Band", "35"));
+        assert_eq!(cfg.band, Some(35));
+        assert!(apply_option(&mut cfg, "Band", "-1"));
+        assert_eq!(cfg.band, None);
+        assert!(apply_option(&mut cfg, "StylePath", "/tmp/me.echo"));
+        assert!(apply_option(&mut cfg, "StylePath", "<empty>"));
+        assert_eq!(cfg.style, None);
+        assert!(!apply_option(&mut cfg, "Move Overhead", "50"));
+        assert!(!apply_option(&mut cfg, "Ponder", "false"));
     }
 
     #[test]

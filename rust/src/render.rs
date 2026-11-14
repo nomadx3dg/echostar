@@ -69,7 +69,7 @@ pub fn render(pos: &Chess, perspective: Color, last: Option<(Square, Square)>, c
             let piece = pos.board().piece_at(sq);
             let light = (f + r) % 2 == 1;
             if color {
-                let is_last = last.map_or(false, |(a, b)| a == sq || b == sq);
+                let is_last = last.is_some_and(|(a, b)| a == sq || b == sq);
                 let bg = if Some(sq) == king_in_check {
                     CHECK_BG
                 } else if is_last {
@@ -79,7 +79,7 @@ pub fn render(pos: &Chess, perspective: Color, last: Option<(Square, Square)>, c
                 } else {
                     DARK
                 };
-                let fg = if piece.map_or(false, |p| p.color == Color::White) { 231 } else { 16 };
+                let fg = if piece.is_some_and(|p| p.color == Color::White) { 231 } else { 16 };
                 let g = piece.map_or(" ", |p| glyph(p.role));
                 row += &format!("\x1b[48;5;{bg}m\x1b[38;5;{fg}m {g} \x1b[0m");
             } else {

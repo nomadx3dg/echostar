@@ -118,7 +118,7 @@ impl Analyser for Engine {
                 break;
             }
             if let Some((k, depth, cp, mv)) = parse_info(&line) {
-                if best.get(&k).map_or(true, |(d, _, _)| depth >= *d) {
+                if best.get(&k).is_none_or(|(d, _, _)| depth >= *d) {
                     best.insert(k, (depth, cp, mv));
                 }
             }

@@ -27,24 +27,32 @@ struct Args {
     positional: Vec<String>,
 }
 
-fn parse_args(raw: &[String]) -> Args {
-    const SWITCHES: [&str; 3] = ["show", "plain", "no-save"];
+const SWITCHES: [&str; 4] = ["show", "plain", "no-save", "help"];
+const VALUE_FLAGS: [&str; 11] =
+    ["style", "stockfish", "dial", "band", "depth", "threads", "hash", "seed", "movetime", "color", "save-dir"];
+
+/// Unknown options and flags without a value are errors: a typo like `--dail sharp` must not silently play on the
+/// default dial.
+fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut a = Args { flags: HashMap::new(), switches: vec![], positional: vec![] };
     let mut i = 0;
     while i < raw.len() {
         if let Some(name) = raw[i].strip_prefix("--") {
             if SWITCHES.contains(&name) {
                 a.switches.push(name.to_string());
-            } else if let Some(v) = raw.get(i + 1) {
+            } else if VALUE_FLAGS.contains(&name) {
+                let v = raw.get(i + 1).ok_or_else(|| format!("--{name} needs a value"))?;
                 a.flags.insert(name.to_string(), v.clone());
                 i += 1;
+            } else {
+                return Err(format!("unknown option --{name} (see `echo-rs help`)"));
             }
         } else {
             a.positional.push(raw[i].clone());
         }
         i += 1;
     }
-    a
+    Ok(a)
 }
 
 impl Args {
@@ -63,18 +71,17 @@ impl Args {
 }
 
 fn config_from(a: &Args) -> Result<Config, String> {
-    let mut cfg = Config::default();
-    cfg.style = a.get("style").cloned();
-    cfg.stockfish = a.get("stockfish").cloned();
-    if let Some(d) = a.get("dial") {
-        cfg.dial = d.clone();
-    }
-    cfg.band = a.num("band")?;
-    cfg.depth = a.num("depth")?.unwrap_or(14);
-    cfg.threads = a.num("threads")?;
-    cfg.hash = a.num("hash")?;
-    cfg.seed = a.num("seed")?;
-    Ok(cfg)
+    let defaults = Config::default();
+    Ok(Config {
+        style: a.get("style").cloned(),
+        stockfish: a.get("stockfish").cloned(),
+        dial: a.get("dial").cloned().unwrap_or(defaults.dial),
+        band: a.num("band")?,
+        depth: a.num("depth")?.unwrap_or(defaults.depth),
+        threads: a.num("threads")?,
+        hash: a.num("hash")?,
+        seed: a.num("seed")?,
+    })
 }
 
 fn print_profile(m: &Model) {
@@ -252,7 +259,11 @@ fn real_main() -> Result<(), String> {
         println!("{HELP}");
         return Ok(());
     };
-    let args = parse_args(&raw[1..]);
+    let args = parse_args(&raw[1..])?;
+    if args.on("help") {
+        println!("{HELP}");
+        return Ok(());
+    }
     match cmd.as_str() {
         "play" => play(&args),
         "profile" => {
@@ -273,5 +284,35 @@ fn main() {
     if let Err(e) = real_main() {
         eprintln!("error: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_flags_switches_and_positionals() {
+        let a = parse_args(&s(&["style.echo", "--dial", "sharp", "--show"])).unwrap();
+        assert_eq!(a.positional, vec!["style.echo"]);
+        assert_eq!(a.get("dial").map(String::as_str), Some("sharp"));
+        assert!(a.on("show") && !a.on("plain"));
+    }
+
+    #[test]
+    fn rejects_unknown_flags_and_missing_values() {
+        assert!(parse_args(&s(&["--dail", "sharp"])).err().unwrap().contains("--dail"));
+        assert!(parse_args(&s(&["--depth"])).err().unwrap().contains("needs a value"));
+    }
+
+    #[test]
+    fn config_uses_defaults_and_overrides() {
+        let cfg = config_from(&parse_args(&s(&["--band", "35"])).unwrap()).unwrap();
+        assert_eq!((cfg.dial.as_str(), cfg.band, cfg.depth), ("balanced", Some(35), 14));
+        assert!(config_from(&parse_args(&s(&["--depth", "deep"])).unwrap()).is_err());
     }
 }
