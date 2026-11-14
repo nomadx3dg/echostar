@@ -541,3 +541,34 @@ def test_resume_from_v1_profile_writes_v2(tmp_path):
     echo.learn(learn_args(pgn, out, resume=str(path)))
     net, meta = echo.load_model(out)                                # no migration note: already v2
     assert "migrated_from" not in meta and meta["profile_version"] == 2 and net.W2T.shape[0] == echo.N_MOVES
+
+
+# ---------------------------------------------------------------- typed-move parsing
+def test_parse_move_accepts_forgiving_input():
+    board = chess.Board()
+    for san in ("e4", "e5", "Nf3", "Nc6"):
+        board.push_san(san)
+    assert echo.parse_move(board, "Bb5").uci() == "f1b5"
+    assert echo.parse_move(board, "bb5").uci() == "f1b5"          # lowercase bishop
+    assert echo.parse_move(board, "nc3").uci() == "b1c3"          # lowercase knight
+    assert echo.parse_move(board, "g1h3") is None                 # g1 is empty now
+    assert echo.parse_move(board, "b4").uci() == "b2b4"           # a real pawn move is never reinterpreted
+    assert echo.parse_move(board, "d2-d4").uci() == "d2d4"
+
+
+def test_parse_move_castling_and_junk():
+    board = chess.Board("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1")
+    assert echo.parse_move(board, "0-0").uci() == "e1g1"
+    assert echo.parse_move(board, "o-o-o").uci() == "e1c1"
+    for bad in ("", "   ", "xyz", "e5", "Qh5"):
+        assert echo.parse_move(board, bad) is None
+
+
+def test_coach_line_printed_when_gate_falls_back(capsys):
+    # style ranks the engine's best last and every deep check fails -> budget runs out, engine best is played
+    cps = {"e2e4": 50, "d2d4": 49, "c2c4": 48, "g1f3": 47, "b1c3": 46}
+    deep = {u: -500 for u in cps if u != "e2e4"}
+    bot = echo.Echo(FakeEngine(cps, deep), StubBrain({"d2d4": 5, "c2c4": 4, "g1f3": 3, "b1c3": 2}),
+                    {"band": 100, "temp": 0.0}, verbose=True)
+    assert bot.choose(chess.Board()).uci() == "e2e4"
+    assert "falls back" in capsys.readouterr().out

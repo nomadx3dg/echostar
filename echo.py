@@ -605,6 +605,10 @@ class Echo:
                           f"Echo plays {board.san(move)} ({cp / 100:+.2f})")
                 return move
         self.history.append((True, 0))
+        if self.verbose:
+            print(f"   [coach] {len(safe)}/{len(cands)} moves were safe | "
+                  f"engine best {board.san(best_move)} ({best_cp / 100:+.2f}) | "
+                  f"Echo falls back to the engine's best move")
         return best_move
 
 
@@ -682,6 +686,35 @@ def save_game(board, white, black, directory, result=None):
     return path
 
 
+def parse_move(board, text):
+    """Read a typed move: SAN, UCI, or a forgiving variant. Returns a legal Move or None.
+
+    Accepts a lowercase piece letter (bf3, nxe5), 0-0 / o-o for castling, and e2-e4 style input.
+    The lowercase fix is only tried after the literal text failed, so a real pawn move always wins.
+    """
+    text = text.strip()
+    if not text:
+        return None
+    castle = text.lower().replace("0", "o")
+    if castle in ("o-o", "o-o-o"):
+        text = castle.upper()
+    candidates = [text, text.replace("-", "")]
+    if text[0] in "nbrqk":
+        candidates.append(text[0].upper() + text[1:])
+    for cand in candidates:
+        try:
+            return board.parse_san(cand)
+        except ValueError:
+            pass
+        try:
+            move = chess.Move.from_uci(cand)
+        except ValueError:
+            continue
+        if move in board.legal_moves:
+            return move
+    return None
+
+
 def play(args):
     brain = StyleBrain(args.style)
     if not args.style:
@@ -734,15 +767,9 @@ def play(args):
                     else:
                         print("Nothing to undo yet.\n")
                     continue
-                try:
-                    try:
-                        move = board.parse_san(text)
-                    except ValueError:
-                        move = chess.Move.from_uci(text)
-                        if move not in board.legal_moves:
-                            raise ValueError
-                except ValueError:
-                    print("Illegal or unreadable move, try again.\n")
+                move = parse_move(board, text)
+                if move is None:
+                    print("Illegal or unreadable move, try again. (Examples: e4, Nf3, O-O, e8=Q, e2e4)\n")
                     continue
                 board.push(move)
                 last = move

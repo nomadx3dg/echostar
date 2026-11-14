@@ -108,7 +108,7 @@ python echo.py play --style style.npz --dial balanced --color white --show
 | `balanced` | 50 cp | your style with fewer slips |
 | `sharp` | 20 cp | near-perfect play, style as the tiebreaker |
 
-In a game, type moves like `e4`, `Nf3`, `O-O`, `e8=Q` (or `e2e4`). Other commands: `undo`, `hint`, `resign`, `help`, `quit`.
+In a game, type moves like `e4`, `Nf3`, `O-O`, `e8=Q` (or `e2e4`). Lowercase piece letters (`nf3`, `bb5`) and `0-0` also work, which helps on phone keyboards. Other commands: `undo`, `hint`, `resign`, `help`, `quit`.
 
 Other options: `--movetime SECONDS` (instead of `--depth`), `--band CP` and `--temp X` (custom dial), `--seed N`
 (reproducible games), `--threads`, `--hash`, `--plain` (ASCII board), `--no-save`.
