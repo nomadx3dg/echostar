@@ -25,6 +25,7 @@ import shutil
 import sys
 import time
 from collections import Counter
+from urllib.parse import quote
 
 import chess
 import chess.engine
@@ -264,6 +265,9 @@ def learn(args):
             board.push(move)
         per_game.append(samples)
 
+    if n_pos == 0:
+        sys.exit(f"Found {len(games)} games for '{args.player}', but none contain a move by them to learn from.")
+
     # Hold out the last 10% of games to measure whether the model really predicts you
     n_val = max(1, len(per_game) // 10) if len(per_game) >= 10 else 0
     train = [s for g in per_game[:len(per_game) - n_val] for s in g]
@@ -494,6 +498,8 @@ class Echo:
                  else chess.engine.Limit(depth=self.depth + 6))
         board.push(move)
         try:
+            if board.is_checkmate():
+                return MATE              # nothing to search, and the Rust port does the same
             info = self.engine.analyse(board, limit)
             return info["score"].pov(mover).score(mate_score=MATE)
         finally:
@@ -502,6 +508,10 @@ class Echo:
     def choose(self, board, movetime=None):
         """Pick a move. `movetime` (seconds) switches from fixed depth to a time budget."""
         cands = self.candidates(board, movetime)
+        if not cands:
+            # The engine gave nothing usable: play any legal move rather than crash (same as the Rust port).
+            self.history.append((False, 0))
+            return next(iter(board.legal_moves))
         best_move, best_cp = cands[0]
         band = self.dial["band"]
         if best_cp >= MATE - 1000:
@@ -636,7 +646,11 @@ def play(args):
         while not board.is_game_over(claim_draw=True):
             print(render(board, human, last, color=not args.plain), "\n")
             if board.turn == human:
-                text = input("Your move: ").strip()
+                try:
+                    text = input("Your move: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()              # Ctrl-D / Ctrl-C: stop cleanly, the game is still saved below
+                    break
                 if text in ("quit", "q"):
                     break
                 if text == "help":
@@ -652,9 +666,12 @@ def play(args):
                     print(f"Engine suggests {board.san(info['pv'][0])} "
                           f"({info['score'].pov(board.turn).score(mate_score=MATE) / 100:+.2f})\n")
                     continue
-                if text == "undo" and len(board.move_stack) >= 2:
-                    board.pop(); board.pop()
-                    last = board.peek() if board.move_stack else None
+                if text == "undo":
+                    if len(board.move_stack) >= 2:
+                        board.pop(); board.pop()
+                        last = board.peek() if board.move_stack else None
+                    else:
+                        print("Nothing to undo yet.\n")
                     continue
                 try:
                     try:
@@ -685,10 +702,12 @@ def play(args):
         if not args.no_save and board.move_stack:
             white, black = (brain.player, "Echo") if human == chess.WHITE else ("Echo", brain.player)
             print("Game saved to", save_game(board, white, black, args.save_dir, result))
-        engine.quit()
+        try:
+            engine.quit()
+        except chess.engine.EngineError:
+            pass                         # the engine already died; don't hide the real error behind this one
 
 
-# ----------------------------------------------------------------------------
 # ----------------------------------------------------------------------------
 # Download your games (Lichess / Chess.com public APIs, no account token needed)
 # ----------------------------------------------------------------------------
@@ -715,6 +734,8 @@ def http_get(url, accept="*/*", retries=3):
             sys.exit(f"The server answered HTTP {exc.code} for {url}")
         except urllib.error.URLError as exc:
             sys.exit(f"Network error: {exc.reason}")
+        except OSError as exc:           # timeouts and dropped connections while reading the body
+            sys.exit(f"Network error: {exc}")
 
 
 def fetch_lichess(user, max_games, speeds=None, rated=False, base=LICHESS_URL):
@@ -724,7 +745,7 @@ def fetch_lichess(user, max_games, speeds=None, rated=False, base=LICHESS_URL):
         query += "&perfType=" + ",".join(names[s] for s in speeds)
     if rated:
         query += "&rated=true"
-    return http_get(f"{base}/api/games/user/{user}?{query}", accept="application/x-chess-pgn")
+    return http_get(f"{base}/api/games/user/{quote(user, safe='')}?{query}", accept="application/x-chess-pgn")
 
 
 def split_games(pgn_text):
@@ -743,7 +764,8 @@ def game_speed(game_text):
 def fetch_chesscom(user, max_games, speeds=None, base=CHESSCOM_URL):
     """Newest `max_games` games, walking Chess.com's monthly archives from the latest month backwards."""
     import json as _json
-    archives = _json.loads(http_get(f"{base}/pub/player/{user}/games/archives", "application/json")).get("archives", [])
+    archives = _json.loads(http_get(f"{base}/pub/player/{quote(user, safe='')}/games/archives",
+                                    "application/json")).get("archives", [])
     games = []
     for url in reversed(archives):                       # newest month first
         month = split_games(http_get(url + "/pgn", "application/x-chess-pgn"))

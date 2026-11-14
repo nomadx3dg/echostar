@@ -338,3 +338,81 @@ def test_fetch_cmd_writes_file(mock_server, tmp_path, monkeypatch):
     out = tmp_path / "g.pgn"
     echo.fetch_cmd(Namespace(user="alice", site="lichess", max=3, speed=None, rated=False, out=str(out)))
     assert out.read_text().count("[Event ") == 1
+
+
+# ---------------------------------------------------------------- robustness
+def test_no_engine_candidates_falls_back_to_a_legal_move():
+    bot = make_echo({}, {})                         # the engine returns no lines at all
+    board = chess.Board()
+    assert bot.choose(board) in board.legal_moves
+    assert bot.history == [(False, 0)]
+
+
+def test_verify_skips_the_engine_when_the_move_mates():
+    # Fool's mate: after 1.f3 e5 2.g4 black plays Qh4#
+    board = chess.Board("rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2")
+
+    class NeverCalled:
+        def analyse(self, *args, **kwargs):
+            raise AssertionError("the engine should not be asked about a checkmate")
+
+    bot = echo.Echo(NeverCalled(), StubBrain({}), "sharp")
+    assert bot.verify(board, chess.Move.from_uci("d8h4")) == echo.MATE
+    assert not board.move_stack                     # the board is left as it was
+
+
+def test_learn_with_no_player_moves_is_a_clear_error(tmp_path):
+    pgn = tmp_path / "empty.pgn"
+    pgn.write_text('[White "Me"]\n[Black "Opp"]\n[Result "*"]\n\n*\n\n')
+    with pytest.raises(SystemExit) as exc:
+        echo.learn(learn_args(pgn, tmp_path / "s.npz"))
+    assert "none contain a move" in str(exc.value)
+
+
+def play_args(tmp_path, **kw):
+    base = dict(style=None, stockfish=None, threads=None, hash=None, seed=None, dial="balanced", band=None,
+                temp=None, depth=14, color="white", show=False, plain=True, movetime=None, no_save=True,
+                save_dir=str(tmp_path))
+    base.update(kw)
+    return Namespace(**base)
+
+
+class DummyEngine:
+    options = {}
+
+    def __init__(self):
+        self.quit_called = False
+
+    def configure(self, opts):
+        pass
+
+    def quit(self):
+        self.quit_called = True
+
+
+def test_play_stops_cleanly_on_eof_and_reports_nothing_to_undo(tmp_path, monkeypatch, capsys):
+    engine = DummyEngine()
+    monkeypatch.setattr(echo, "find_stockfish", lambda path: "stockfish")
+    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", classmethod(lambda cls, path: engine))
+    inputs = iter(["undo"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    echo.play(play_args(tmp_path))                  # must return normally, not raise EOFError
+    assert "Nothing to undo yet." in capsys.readouterr().out
+    assert engine.quit_called
+
+
+@pytest.mark.parametrize("fetch,args", [(echo.fetch_lichess, ("a b/c", 1)), (echo.fetch_chesscom, ("a b/c", 1))])
+def test_usernames_are_url_quoted(mock_server, fetch, args):
+    import json
+    base, routes = mock_server
+    routes["/api/games/user/a%20b%2Fc?max=1&tags=true&clocks=false&evals=false&opening=false"] = GAME
+    routes["/pub/player/a%20b%2Fc/games/archives"] = json.dumps({"archives": [f"{base}/m/1"]})
+    routes["/m/1/pgn"] = GAME
+    assert fetch(*args, base=base).count("[Event ") == 1
