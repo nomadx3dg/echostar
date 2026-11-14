@@ -131,10 +131,39 @@ pub fn encode(pos: &Chess) -> Vec<usize> {
         .collect()
 }
 
-/// Output unit for a move: `from * 64 + to`, mirrored for black.
+/// Output units 0..4096 are from-to squares (profile v1). Queen promotions keep their v1 unit; knight, bishop and rook
+/// promotions have their own: 3 pieces x 3 directions x 8 from-files = 72 extra units. Mirrors `echo.py`.
+pub const BASE_MOVES: usize = 4096;
+pub const NUM_MOVES: usize = BASE_MOVES + 3 * 24;
+
+/// Output unit for a move: `from * 64 + to` mirrored for black, or an under-promotion unit.
 pub fn move_index(pos: &Chess, m: &Move) -> usize {
     let (from, to) = from_to(m);
+    let piece = match m.promotion() {
+        Some(Role::Knight) => Some(0),
+        Some(Role::Bishop) => Some(1),
+        Some(Role::Rook) => Some(2),
+        _ => None,
+    };
+    if let Some(piece) = piece {
+        let drift = to.file() as i32 - from.file() as i32; // -1, 0 or +1; files are unaffected by mirroring
+        return BASE_MOVES + piece * 24 + (drift + 1) as usize * 8 + from.file() as usize;
+    }
     mirror(from, pos.turn()) * 64 + mirror(to, pos.turn())
+}
+
+/// For each under-promotion unit, the v1 unit (the queen promotion) it was split off from. Used to migrate v1 models.
+pub fn underpromo_sources() -> Vec<usize> {
+    let mut src = Vec::with_capacity(NUM_MOVES - BASE_MOVES);
+    for _piece in 0..3 {
+        for drift in -1i32..=1 {
+            for file in 0..8i32 {
+                let to_file = (file + drift).clamp(0, 7);
+                src.push((48 + file as usize) * 64 + 56 + to_file as usize);
+            }
+        }
+    }
+    src
 }
 
 /// First four FEN fields (board, turn, castling, en passant): identifies a position for the opening book.

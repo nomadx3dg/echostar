@@ -19,6 +19,7 @@ struct Case {
     features: Vec<Vec<f64>>,
     move_index: Vec<usize>,
     logits: Vec<f64>,
+    v1_logits: Vec<f64>,
     scores: Vec<f64>,
 }
 
@@ -73,4 +74,30 @@ fn rust_matches_python_reference() {
         }
     }
     assert!(checked > 500, "expected hundreds of golden moves, checked {checked}");
+}
+
+/// A v1 file has no promotion pieces. Loading it must not change any score: the migrated model must reproduce the
+/// logits Python computes for the same legacy weights (`v1_logits`) on every golden move, under-promotions included.
+#[test]
+fn v1_model_migrates_without_changing_scores() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
+    let golden: Golden =
+        serde_json::from_str(&std::fs::read_to_string(format!("{dir}/golden.json")).unwrap()).unwrap();
+    let v1 = Model::load(&format!("{dir}/golden_v1.echo")).unwrap();
+    assert_eq!(v1.migrated_from, Some(1));
+    assert_eq!(Model::load(&format!("{dir}/golden.echo")).unwrap().migrated_from, None);
+
+    let (mut checked, mut underpromotions) = (0, 0);
+    for case in &golden.cases {
+        let pos: Chess = case.fen.parse::<Fen>().unwrap().into_position(CastlingMode::Standard).unwrap();
+        let moves: Vec<_> =
+            case.moves.iter().map(|u| u.parse::<UciMove>().unwrap().to_move(&pos).unwrap()).collect();
+        let logits = v1.logits(&pos, &moves);
+        for (i, uci) in case.moves.iter().enumerate() {
+            assert!((logits[i] - case.v1_logits[i]).abs() < 1e-6, "{uci} in {}", case.fen);
+            checked += 1;
+            underpromotions += (uci.len() == 5 && !uci.ends_with('q')) as usize;
+        }
+    }
+    assert!(checked > 500 && underpromotions >= 12, "checked {checked} moves, {underpromotions} under-promotions");
 }

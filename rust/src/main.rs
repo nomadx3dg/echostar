@@ -85,6 +85,9 @@ fn config_from(a: &Args) -> Result<Config, String> {
 }
 
 fn print_profile(m: &Model) {
+    if let Some(v) = m.migrated_from {
+        println!("\nNote: this is a v{v} model, migrated in memory to the promotion-aware v2. Scores are unchanged.");
+    }
     println!("\nStyle profile for {} ({} games, {} positions)", m.player, m.games, m.positions);
     println!("Tendency = how much more (or less) you pick this kind of move than a random legal move.\n");
     let rate = |map: &HashMap<String, f64>, n: &str| map.get(n).copied().unwrap_or(0.0);

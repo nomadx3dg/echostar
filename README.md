@@ -136,6 +136,9 @@ cd rust && cargo build --release
 ./target/release/echo-rs uci --style ../style.echo       # run as a UCI engine
 ```
 
+Profiles trained before promotion-aware moves (format v1) still load: both the Python and Rust loaders migrate them in
+memory with no change in scores, and say so. See [docs/FORMAT.md](docs/FORMAT.md).
+
 `echo-rs uci` lets chess GUIs and [`lichess-bot`](https://github.com/lichess-bot-devs/lichess-bot) use Echo as an engine.
 UCI options: `StylePath`, `StockfishPath`, `Dial`, `Band`, `Depth`, `Threads`, `Hash`.
 

@@ -1,13 +1,15 @@
 //! Loads the `.echo` model (see docs/FORMAT.md) and scores moves.
 
-use crate::features::{self, FEATURE_NAMES, NUM_FEATURES};
+use crate::features::{self, BASE_MOVES, FEATURE_NAMES, NUM_FEATURES, NUM_MOVES};
 use serde::Deserialize;
 use shakmaty::uci::UciMove;
 use shakmaty::{Chess, Move};
 use std::collections::HashMap;
 
 const MAGIC: &[u8; 8] = b"ECHOSTYL";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+/// Format v1 had 4096 move units and no promotion pieces; it is migrated in memory when loaded.
+const LEGACY_VERSION: u32 = 1;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Validation {
@@ -49,11 +51,13 @@ pub struct Model {
     pub baseline_rate: HashMap<String, f64>,
     pub book: HashMap<String, HashMap<String, u32>>,
     pub validation: Option<Validation>,
+    /// Set when the file was an older format that was migrated in memory (the file itself is never modified).
+    pub migrated_from: Option<u32>,
     hidden: usize,
     w1: Vec<f64>,  // 768 x hidden
     b1: Vec<f64>,  // hidden
-    w2t: Vec<f64>, // 4096 x hidden
-    b2: Vec<f64>,  // 4096
+    w2t: Vec<f64>, // NUM_MOVES x hidden
+    b2: Vec<f64>,  // NUM_MOVES
     w: Vec<f64>,   // features
 }
 
@@ -78,8 +82,8 @@ impl Model {
             return Err("not an .echo file (run `python echo.py export style.npz` to make one)".into());
         }
         let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        if version != VERSION {
-            return Err(format!("unsupported model version {version} (this build reads {VERSION})"));
+        if version != VERSION && version != LEGACY_VERSION {
+            return Err(format!("unsupported model version {version} (this build reads {LEGACY_VERSION} and {VERSION})"));
         }
         let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
         let json = bytes.get(16..16 + json_len).ok_or("model header is truncated")?;
@@ -89,7 +93,7 @@ impl Model {
         if h.feature_names.iter().map(String::as_str).collect::<Vec<_>>() != expected
             || h.dims.features != NUM_FEATURES
             || h.dims.input != 768
-            || h.dims.moves != 4096
+            || h.dims.moves != if version == LEGACY_VERSION { BASE_MOVES } else { NUM_MOVES }
         {
             return Err("model was trained with a different feature set than this engine".into());
         }
@@ -97,9 +101,18 @@ impl Model {
         let mut pos = 16 + json_len;
         let w1 = take_f32(bytes, &mut pos, 768 * hid)?;
         let b1 = take_f32(bytes, &mut pos, hid)?;
-        let w2t = take_f32(bytes, &mut pos, 4096 * hid)?;
-        let b2 = take_f32(bytes, &mut pos, 4096)?;
+        let mut w2t = take_f32(bytes, &mut pos, h.dims.moves * hid)?;
+        let mut b2 = take_f32(bytes, &mut pos, h.dims.moves)?;
         let w = take_f32(bytes, &mut pos, NUM_FEATURES)?;
+        if version == LEGACY_VERSION {
+            // Every under-promotion unit starts as a copy of the queen promotion it was split from, so a v1 model
+            // scores every move exactly as it did before.
+            for src in features::underpromo_sources() {
+                let row = w2t[src * hid..(src + 1) * hid].to_vec();
+                w2t.extend_from_slice(&row);
+                b2.push(b2[src]);
+            }
+        }
         Ok(Model {
             player: h.player,
             games: h.games,
@@ -108,6 +121,7 @@ impl Model {
             baseline_rate: h.baseline_rate,
             book: h.book,
             validation: h.validation,
+            migrated_from: (version == LEGACY_VERSION).then_some(version),
             hidden: hid,
             w1,
             b1,

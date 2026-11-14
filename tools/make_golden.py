@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate golden test vectors so the Rust engine can be checked against the Python reference.
 
-Writes rust/tests/data/golden.echo (a tiny random model, hidden=8) and golden.json (positions with the
+Writes rust/tests/data/golden.echo (a tiny random model, hidden=8) and golden_v1.echo (the same model in the
+legacy v1 layout) and golden.json (positions with the
 features, input units, move indices, logits and style scores that Python computes for every legal move).
 """
 import json
@@ -25,6 +26,8 @@ SPECIAL = [
     "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",           # en passant available
     "4k3/P6P/8/8/8/8/p6p/4K3 w - - 0 1",                                       # promotions both sides
     "4k3/P6P/8/8/8/8/p6p/4K3 b - - 0 1",
+    "1n2k3/P7/8/8/8/8/7p/4K3 w - - 0 1",                                       # white promotes by capturing too
+    "4k3/8/8/8/8/8/7p/4K1R1 b - - 0 1",                                        # black promotes by capturing too
     "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3",           # white in check
     "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",     # early queen, scholar's setup
 ]
@@ -68,9 +71,15 @@ def main():
 
     os.makedirs(OUT, exist_ok=True)
     echo.export_echo(net, meta, os.path.join(OUT, "golden.echo"))
+    echo.export_echo(net, meta, os.path.join(OUT, "golden_v1.echo"), version=1)   # legacy layout, for migration tests
 
     brain = echo.StyleBrain()
     brain.net, brain.book = net, book
+    # What the legacy v1 file must score after the in-memory migration (checked independently in tests/test_echo.py)
+    v1_params, _ = echo.migrate_params({"W1": net.W1, "b1": net.b1, "W2T": net.W2T[:echo.N_BASE_MOVES],
+                                        "b2": net.b2[:echo.N_BASE_MOVES], "w": net.w})
+    net_v1 = echo.StyleNet(hidden=8)
+    net_v1.load_params(v1_params)
     cases = []
     for fen in fens:
         board = chess.Board(fen)
@@ -86,6 +95,7 @@ def main():
             "features": [echo.features(board, m).tolist() for m in moves],
             "move_index": [echo.move_index(board, m) for m in moves],
             "logits": net.logits(board, moves).tolist(),
+            "v1_logits": net_v1.logits(board, moves).tolist(),
             "scores": brain.scores(board, moves),
         })
     with open(os.path.join(OUT, "golden.json"), "w") as fh:

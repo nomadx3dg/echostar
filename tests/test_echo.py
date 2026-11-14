@@ -238,7 +238,20 @@ def test_export_echo_format(tmp_path):
     assert data[:8] == echo.FORMAT_MAGIC
     version, json_len = struct.unpack("<II", data[8:16])
     header = json.loads(data[16:16 + json_len])
-    assert version == 1 and header["dims"]["hidden"] == 8
+    assert version == 2 and header["dims"]["hidden"] == 8 and header["dims"]["moves"] == echo.N_MOVES
+    floats = (768 * 8) + 8 + (echo.N_MOVES * 8) + echo.N_MOVES + len(echo.FEATURES)
+    assert len(data) == 16 + json_len + 4 * floats
+
+
+def test_export_legacy_v1_layout(tmp_path):
+    import json
+    import struct
+    net = echo.StyleNet(hidden=8)
+    path = tmp_path / "old.echo"
+    echo.export_echo(net, {"player": "Me", "games": 1, "positions": 1, "book": {}}, str(path), version=1)
+    data = path.read_bytes()
+    version, json_len = struct.unpack("<II", data[8:16])
+    assert version == 1 and json.loads(data[16:16 + json_len])["dims"]["moves"] == 4096
     floats = (768 * 8) + 8 + (4096 * 8) + 4096 + len(echo.FEATURES)
     assert len(data) == 16 + json_len + 4 * floats
 
@@ -416,3 +429,115 @@ def test_usernames_are_url_quoted(mock_server, fetch, args):
     routes["/pub/player/a%20b%2Fc/games/archives"] = json.dumps({"archives": [f"{base}/m/1"]})
     routes["/m/1/pgn"] = GAME
     assert fetch(*args, base=base).count("[Event ") == 1
+
+
+# ---------------------------------------------------------------- promotion-aware moves (profile v2)
+PROMO_FENS = [
+    "4k3/P6P/8/8/8/8/p6p/4K3 w - - 0 1",             # straight promotions, both sides
+    "4k3/P6P/8/8/8/8/p6p/4K3 b - - 0 1",
+    "1n2k3/P7/8/8/8/8/7p/4K3 w - - 0 1",             # white promotes by capturing as well
+    "4k3/8/8/8/8/8/7p/4K1R1 b - - 0 1",              # black promotes by capturing too
+]
+
+
+def test_promotions_get_distinct_units_and_queen_keeps_its_v1_unit():
+    board = chess.Board(PROMO_FENS[0])
+    promos = [board.parse_uci("a7a8" + p) for p in "qrbn"]
+    idx = [echo.move_index(board, m) for m in promos]
+    assert len(set(idx)) == 4
+    assert idx[0] == chess.A7 * 64 + chess.A8                # the queen promotion is the unchanged v1 unit
+    assert all(i < echo.N_MOVES for i in idx) and all(i >= echo.N_BASE_MOVES for i in idx[1:])
+
+
+@pytest.mark.parametrize("fen", PROMO_FENS + [chess.STARTING_FEN, "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1"])
+def test_move_index_is_injective_over_legal_moves(fen):
+    board = chess.Board(fen)
+    moves = list(board.legal_moves)
+    assert len({echo.move_index(board, m) for m in moves}) == len(moves)
+
+
+def test_promotion_mirroring_agrees_between_colors():
+    white = chess.Board("4k3/P7/8/8/8/8/8/4K3 w - - 0 1")
+    black = white.mirror()                                    # same position, colors swapped
+    for p in "qrbn":
+        a = echo.move_index(white, white.parse_uci("a7a8" + p))
+        b = echo.move_index(black, black.parse_uci("a2a1" + p))
+        assert a == b
+
+
+def promo_sample(board, move):
+    moves = list(board.legal_moves)
+    F = np.array([echo.features(board, m) for m in moves])
+    return (echo.encode(board), np.array([echo.move_index(board, m) for m in moves]), F, moves.index(move)), moves
+
+
+def test_model_can_learn_to_prefer_a_knight_promotion():
+    board = chess.Board("4k3/P7/8/8/8/8/8/3K4 w - - 0 1")   # Na8 and Ba8 are identical quiet moves in v1
+    net = echo.StyleNet(hidden=8)
+    sample, moves = promo_sample(board, board.parse_uci("a7a8n"))
+    for _ in range(60):
+        net.step(sample, 0.3)
+    p = echo.softmax(net.logits(board, moves))
+    by_uci = {m.uci(): p[i] for i, m in enumerate(moves)}
+    assert by_uci["a7a8n"] > 0.5 and by_uci["a7a8n"] > by_uci["a7a8b"]
+
+
+def v1_file(tmp_path, net, **meta_extra):
+    """Write a profile exactly as v1 did: 4096 move units and no profile_version field."""
+    import json
+    meta = {"player": "Me", "games": 3, "positions": 30, "played_rate": {n: 0.1 for n in echo.FEATURES},
+            "baseline_rate": {n: 0.1 for n in echo.FEATURES}, "book": {}, "validation": None}
+    meta.update(meta_extra)
+    path = tmp_path / "v1.npz"
+    np.savez_compressed(path, meta=json.dumps(meta), W1=net.W1, b1=net.b1, W2T=net.W2T[:4096], b2=net.b2[:4096],
+                        w=net.w)
+    return path
+
+
+def v1_logits(net, board, moves):
+    """The v1 scoring formula, written out independently of echo.StyleNet."""
+    h = np.maximum(net.W1[echo.encode(board)].sum(0) + net.b1, 0)
+    out = []
+    for m in moves:
+        f, t = m.from_square, m.to_square
+        if board.turn == chess.BLACK:
+            f, t = chess.square_mirror(f), chess.square_mirror(t)
+        i = f * 64 + t
+        out.append(net.W2T[i] @ h + net.b2[i] + echo.features(board, m) @ net.w)
+    return np.array(out)
+
+
+def test_v1_profile_migrates_without_changing_any_score(tmp_path, capsys):
+    rng = np.random.default_rng(5)
+    net = echo.StyleNet(rng=rng, hidden=8)
+    net.W2T[:4096] = rng.normal(0, 0.5, (4096, 8)); net.b2[:4096] = rng.normal(0, 0.3, 4096)
+    net.W1 = rng.normal(0, 0.5, net.W1.shape); net.w = rng.normal(0, 0.8, net.w.shape)
+    path = v1_file(tmp_path, net)
+
+    migrated, meta = echo.load_model(path)
+    assert "v1 profile" in capsys.readouterr().err                 # never silent
+    assert meta["migrated_from"] == 1 and meta["profile_version"] == 2
+    assert migrated.W2T.shape[0] == echo.N_MOVES
+    assert np.allclose(migrated.W2T[:4096], net.W2T[:4096])
+
+    for fen in PROMO_FENS + [chess.STARTING_FEN, "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R b KQkq - 0 1"]:
+        board = chess.Board(fen)
+        moves = list(board.legal_moves)
+        assert np.allclose(migrated.logits(board, moves), v1_logits(net, board, moves)), fen
+
+
+def test_future_profile_version_is_refused(tmp_path):
+    path = v1_file(tmp_path, echo.StyleNet(hidden=8), profile_version=99)
+    with pytest.raises(SystemExit) as exc:
+        echo.load_model(path)
+    assert "99" in str(exc.value)
+
+
+def test_resume_from_v1_profile_writes_v2(tmp_path):
+    pgn = tmp_path / "g.pgn"
+    write_random_games(pgn, 12)
+    path = v1_file(tmp_path, echo.StyleNet(hidden=8), games=12, positions=100)
+    out = tmp_path / "v2.npz"
+    echo.learn(learn_args(pgn, out, resume=str(path)))
+    net, meta = echo.load_model(out)                                # no migration note: already v2
+    assert "migrated_from" not in meta and meta["profile_version"] == 2 and net.W2T.shape[0] == echo.N_MOVES

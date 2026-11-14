@@ -111,8 +111,31 @@ def encode(board: chess.Board):
     return np.array(idx, dtype=np.int64)
 
 
+# Output units. Units 0..4095 are from-to squares (v1). Queen promotions keep their v1 unit, so ordinary moves and
+# queen promotions score exactly as before. Under-promotions (knight, bishop, rook) get their own units:
+# 3 pieces x 3 directions (capture left, straight, capture right) x 8 from-files = 72 extra units.
+N_BASE_MOVES = 4096
+UNDERPROMO = {chess.KNIGHT: 0, chess.BISHOP: 1, chess.ROOK: 2}
+N_MOVES = N_BASE_MOVES + len(UNDERPROMO) * 24
+PROFILE_VERSION = 2
+
+
+def underpromo_sources():
+    """For each under-promotion unit, the v1 from-to unit (the queen promotion) it was split off from."""
+    src = []
+    for _piece in UNDERPROMO:
+        for drift in (-1, 0, 1):
+            for file in range(8):
+                to_file = min(7, max(0, file + drift))     # off-board directions never occur; any valid source works
+                src.append((48 + file) * 64 + 56 + to_file)   # from the 7th rank to the 8th, in the mover's view
+    return src
+
+
 def move_index(board: chess.Board, move: chess.Move) -> int:
     f, t = move.from_square, move.to_square
+    if move.promotion in UNDERPROMO:
+        drift = chess.square_file(t) - chess.square_file(f)    # -1, 0 or +1; files are unaffected by mirroring
+        return N_BASE_MOVES + UNDERPROMO[move.promotion] * 24 + (drift + 1) * 8 + chess.square_file(f)
     if board.turn == chess.BLACK:
         f, t = chess.square_mirror(f), chess.square_mirror(t)
     return f * 64 + t
@@ -123,8 +146,9 @@ class StyleNet:
         rng = rng or np.random.default_rng(0)
         self.W1 = rng.normal(0, 0.05, (768, hidden))
         self.b1 = np.zeros(hidden)
-        self.W2T = rng.normal(0, 0.02, (4096, hidden))   # one row per from-to move
-        self.b2 = np.zeros(4096)
+        # one row per from-to move, plus the under-promotion units (they start as copies of the queen promotion)
+        widened, _ = migrate_params({"W2T": rng.normal(0, 0.02, (N_BASE_MOVES, hidden)), "b2": np.zeros(N_BASE_MOVES)})
+        self.W2T, self.b2 = widened["W2T"], widened["b2"]
         self.w = np.zeros(len(FEATURES))
 
     def logits(self, board, moves, F=None):
@@ -171,6 +195,24 @@ class StyleNet:
     def load_params(self, p):
         for k, v in p.items():
             setattr(self, k, v.copy())
+
+
+def migrate_params(p):
+    """Profile v1 -> v2: widen W2T and b2 from 4096 to N_MOVES rows. Returns (params, migrated?).
+
+    v1 scored every promotion with the queen-promotion unit. Each new under-promotion unit starts as a copy of that
+    unit, so a migrated profile scores every move exactly as it did before; only further training can tell the
+    promotion pieces apart."""
+    rows = p["W2T"].shape[0]
+    if rows == N_MOVES:
+        return p, False
+    if rows != N_BASE_MOVES:
+        raise ValueError(f"unsupported profile: {rows} move units (expected {N_BASE_MOVES} or {N_MOVES})")
+    src = underpromo_sources()
+    out = dict(p)
+    out["W2T"] = np.vstack([p["W2T"], p["W2T"][src]])
+    out["b2"] = np.concatenate([p["b2"], p["b2"][src]])
+    return out, True
 
 
 BOOK_PLIES = 16
@@ -314,6 +356,7 @@ def learn(args):
                 book.setdefault(key, Counter())[uci] += c
 
     meta = {
+        "profile_version": PROFILE_VERSION,
         "player": args.player,
         "games": len(games) + (old["games"] if old else 0),
         "positions": total,
@@ -331,30 +374,48 @@ def load_model(path):
     if not os.path.exists(path):
         sys.exit(f"Style file not found: {path}. Create one first with: python echo.py learn <games.pgn> --player <name>")
     d = np.load(path, allow_pickle=False)
-    net = StyleNet(hidden=d["W1"].shape[1])
-    net.load_params({k: d[k] for k in ("W1", "b1", "W2T", "b2", "w")})
-    return net, json.loads(str(d["meta"]))
+    meta = json.loads(str(d["meta"]))
+    version = meta.get("profile_version", 1)          # profiles written before versioning have no field: v1
+    if version > PROFILE_VERSION:
+        sys.exit(f"{path} is profile version {version}, but this build reads up to {PROFILE_VERSION}. Update echostar.")
+    params, migrated = migrate_params({k: d[k] for k in ("W1", "b1", "W2T", "b2", "w")})
+    net = StyleNet(hidden=params["W1"].shape[1])
+    net.load_params(params)
+    meta["profile_version"] = PROFILE_VERSION
+    if migrated:
+        meta["migrated_from"] = version
+        print(f"Note: {path} is a v{version} profile; migrated in memory to v{PROFILE_VERSION} "
+              f"(promotion-aware). Scores are unchanged. The file is not modified: `learn --resume` or `export` "
+              f"will write the new version.", file=sys.stderr)
+    return net, meta
 
 
 # ----------------------------------------------------------------------------
 # Portable model format for the Rust port (see docs/FORMAT.md)
 # ----------------------------------------------------------------------------
 FORMAT_MAGIC = b"ECHOSTYL"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 
-def export_echo(net, meta, path):
-    """Write weights + metadata in a dependency-free binary format: magic, version, JSON, f32 tensors."""
+def export_echo(net, meta, path, version=FORMAT_VERSION):
+    """Write weights + metadata in a dependency-free binary format: magic, version, JSON, f32 tensors.
+
+    version=1 writes the legacy 4096-unit layout (under-promotion units dropped) for engine builds that predate
+    promotion-aware profiles; current builds read both."""
+    if version not in (1, FORMAT_VERSION):
+        raise ValueError(f"cannot write format version {version}")
+    moves = N_BASE_MOVES if version == 1 else N_MOVES
     header = dict(meta)
-    header["dims"] = {"input": 768, "hidden": int(net.W1.shape[1]), "moves": 4096, "features": len(FEATURES)}
+    header["dims"] = {"input": 768, "hidden": int(net.W1.shape[1]), "moves": moves, "features": len(FEATURES)}
     header["feature_names"] = FEATURES
     blob = json.dumps(header).encode("utf-8")
     with open(path, "wb") as fh:
         fh.write(FORMAT_MAGIC)
-        fh.write(np.array([FORMAT_VERSION, len(blob)], dtype="<u4").tobytes())
+        fh.write(np.array([version, len(blob)], dtype="<u4").tobytes())
         fh.write(blob)
+        tensors = {"W1": net.W1, "b1": net.b1, "W2T": net.W2T[:moves], "b2": net.b2[:moves], "w": net.w}
         for name in ("W1", "b1", "W2T", "b2", "w"):
-            fh.write(np.ascontiguousarray(getattr(net, name), dtype="<f4").tobytes())
+            fh.write(np.ascontiguousarray(tensors[name], dtype="<f4").tobytes())
 
 
 def export_cmd(args):

@@ -21,7 +21,8 @@ near-equal moves gets played. Nothing in the style model can make Echo play a mo
 ## The style model
 - **Input:** 768 units (12 piece types x 64 squares), always from the mover's point of view (black positions are mirrored).
 - **Hidden layer:** ReLU, 128 units by default.
-- **Output:** one logit per from-to move (4096), plus a linear term over the 21 hand-made features.
+- **Output:** one logit per move unit (4168: from-to squares, plus separate units for knight, bishop and rook
+  promotions, see [FORMAT.md](FORMAT.md)), plus a linear term over the 21 hand-made features.
 - **Training:** softmax over the legal moves, cross-entropy on the move the player actually chose, plain SGD, the best epoch
   by held-out loss is kept.
 - **Opening book:** counts of the moves the player chose in the first 16 plies; added to the score as `1.5 * ln(1 + count)`.
