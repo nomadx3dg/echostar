@@ -13,14 +13,23 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q
   rust:
+    name: rust (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned toolchain gates the build; `stable` moves under us (new clippy lints) so it only warns.
+        toolchain: ["1.97.0", "stable"]
+    continue-on-error: ${{ matrix.toolchain == 'stable' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+          key: ${{ matrix.toolchain }}
       - run: cargo clippy --locked --all-targets --manifest-path rust/Cargo.toml -- -D warnings
       - run: cargo test --locked --manifest-path rust/Cargo.toml
