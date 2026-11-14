@@ -48,6 +48,19 @@ python echo.py learn games/*.pgn --player YourName --resume style.npz --out styl
 ### Other options
 `play` also takes `--depth`, `--threads`, `--hash`, `--plain` (ASCII board), and `--show` (coach view, plus an end-of-game summary of how much strength Echo traded for style). Type `undo` to take back a move.
 
+## Rust engine
+`rust/` is a faster, dependency-light port that plays the same way (and is checked against Python with golden test vectors).
+Training stays in Python; the Rust engine only runs the trained model.
+```
+python echo.py export style.npz --out style.echo
+cd rust && cargo build --release
+./target/release/echo-rs play --style ../style.echo --dial balanced --movetime 1
+./target/release/echo-rs profile ../style.echo
+./target/release/echo-rs uci --style ../style.echo      # run as a UCI engine for chess GUIs and lichess-bot
+```
+`echo-rs play` saves games to `games/` in the same PGN format, so `learn --resume` works on them. The model file format is
+described in `docs/FORMAT.md`. Regenerate the parity vectors with `python tools/make_golden.py` if the features change.
+
 ## Accuracy
 `learn` holds out 10% of your games and reports how often the model predicts your exact move, next to what random guessing would score. With fewer than ~60 games the model mostly memorizes; use more games for a meaningful profile. `echo_sample_training.pgn` is only a 2-game smoke test.
 
@@ -55,5 +68,8 @@ python echo.py learn games/*.pgn --player YourName --resume style.npz --out styl
 ```
 pip install -r requirements-dev.txt
 python -m pytest
+cargo test --manifest-path rust/Cargo.toml
 ```
 The chooser tests use a fake engine, so Stockfish isn't needed to run them.
+
+See `ROADMAP.md` for the plan, including the Lichess bot milestones.
