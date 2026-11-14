@@ -241,3 +241,74 @@ def test_export_echo_format(tmp_path):
     assert version == 1 and header["dims"]["hidden"] == 8
     floats = (768 * 8) + 8 + (4096 * 8) + 4096 + len(echo.FEATURES)
     assert len(data) == 16 + json_len + 4 * floats
+
+
+# ---------------------------------------------------------------- downloading games (mock servers, no internet)
+@pytest.mark.parametrize("tc,expected", [("600", "rapid"), ("180", "blitz"), ("1/86400", "classical"), ("180+2", "blitz")])
+def test_classify_speed_chesscom_formats(tc, expected):
+    assert echo.classify_speed(tc) == expected
+
+
+@pytest.fixture
+def mock_server():
+    import http.server
+    import threading
+
+    routes = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = routes.get(self.path)
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", routes
+    server.shutdown()
+
+
+GAME = '[Event "x"]\n[White "alice"]\n[Black "bob"]\n[Result "1-0"]\n\n1. e4 e5 1-0\n\n'
+
+
+def test_fetch_lichess_builds_query(mock_server):
+    base, routes = mock_server
+    routes["/api/games/user/alice?max=5&tags=true&clocks=false&evals=false&opening=false&perfType=blitz,rapid&rated=true"] = GAME
+    text = echo.fetch_lichess("alice", 5, ["blitz", "rapid"], True, base=base)
+    assert text.count("[Event ") == 1
+
+
+def test_fetch_chesscom_walks_archives_newest_first(mock_server):
+    import json
+    base, routes = mock_server
+    routes["/pub/player/bob/games/archives"] = json.dumps({"archives": [f"{base}/m/2026/09", f"{base}/m/2026/10"]})
+    routes["/m/2026/09/pgn"] = GAME.replace("alice", "bob_old")
+    routes["/m/2026/10/pgn"] = GAME + GAME
+    text = echo.fetch_chesscom("bob", 2, base=base)
+    assert text.count("[Event ") == 2 and "bob_old" not in text      # stopped after the newest month
+
+
+def test_unknown_user_is_a_clear_error(mock_server):
+    base, _ = mock_server
+    with pytest.raises(SystemExit) as exc:
+        echo.fetch_lichess("nobody", 5, base=base)
+    assert "Not found" in str(exc.value)
+
+
+def test_fetch_cmd_writes_file(mock_server, tmp_path, monkeypatch):
+    base, routes = mock_server
+    routes["/api/games/user/alice?max=3&tags=true&clocks=false&evals=false&opening=false"] = GAME
+    monkeypatch.setattr(echo, "LICHESS_URL", base)
+    monkeypatch.setattr(echo, "fetch_lichess",
+                        lambda *a, **k: echo.http_get(f"{base}/api/games/user/alice?max=3&tags=true&clocks=false&evals=false&opening=false"))
+    out = tmp_path / "g.pgn"
+    echo.fetch_cmd(Namespace(user="alice", site="lichess", max=3, speed=None, rated=False, out=str(out)))
+    assert out.read_text().count("[Event ") == 1

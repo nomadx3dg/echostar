@@ -184,9 +184,12 @@ def book_key(board: chess.Board) -> str:
 # ----------------------------------------------------------------------------
 def classify_speed(time_control):
     """Lichess-style speed class from a TimeControl header such as '300+3'."""
+    tc = str(time_control)
+    if "/" in tc:                      # daily / correspondence, e.g. "1/86400"
+        return "classical"
+    parts = tc.split("+")
     try:
-        base, inc = str(time_control).split("+")
-        est = int(base) + 40 * int(inc)
+        est = int(parts[0]) + 40 * (int(parts[1]) if len(parts) > 1 else 0)
     except ValueError:
         return None
     if est < 180:
@@ -686,6 +689,77 @@ def play(args):
 
 
 # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Download your games (Lichess / Chess.com public APIs, no account token needed)
+# ----------------------------------------------------------------------------
+LICHESS_URL = "https://lichess.org"
+CHESSCOM_URL = "https://api.chess.com"
+USER_AGENT = "echostar (https://github.com/nomadx3dg/echostar)"
+
+
+def http_get(url, accept="*/*", retries=3):
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": USER_AGENT})
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < retries - 1:
+                print("Rate limited by the server, waiting 60 seconds...")
+                time.sleep(60)
+                continue
+            if exc.code == 404:
+                sys.exit(f"Not found: {url}\nCheck the username spelling.")
+            sys.exit(f"The server answered HTTP {exc.code} for {url}")
+        except urllib.error.URLError as exc:
+            sys.exit(f"Network error: {exc.reason}")
+
+
+def fetch_lichess(user, max_games, speeds=None, rated=False, base=LICHESS_URL):
+    query = f"max={max_games}&tags=true&clocks=false&evals=false&opening=false"
+    if speeds:
+        names = {"bullet": "bullet", "blitz": "blitz", "rapid": "rapid", "classical": "classical"}
+        query += "&perfType=" + ",".join(names[s] for s in speeds)
+    if rated:
+        query += "&rated=true"
+    return http_get(f"{base}/api/games/user/{user}?{query}", accept="application/x-chess-pgn")
+
+
+def fetch_chesscom(user, max_games, base=CHESSCOM_URL):
+    import json as _json
+    archives = _json.loads(http_get(f"{base}/pub/player/{user}/games/archives", "application/json")).get("archives", [])
+    chunks, total = [], 0
+    for url in reversed(archives):             # newest month first
+        text = http_get(url + "/pgn", "application/x-chess-pgn")
+        chunks.append(text)
+        total += text.count("[Event ")
+        if total >= max_games:
+            break
+    return "\n\n".join(chunks)
+
+
+def fetch_cmd(args):
+    speeds = [x for x in args.speed.split(",")] if args.speed else None
+    for sp in speeds or []:
+        if sp not in ("bullet", "blitz", "rapid", "classical"):
+            sys.exit(f"Unknown speed '{sp}'. Use bullet, blitz, rapid or classical.")
+    if args.site == "lichess":
+        text = fetch_lichess(args.user, args.max, speeds, args.rated)
+    else:
+        text = fetch_chesscom(args.user, args.max)
+    count = text.count("[Event ")
+    if count == 0:
+        sys.exit("No games came back. Check the username, and loosen --speed / --rated if you used them.")
+    with open(args.out, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    print(f"Saved {count} games to {args.out}")
+    print(f"Next: python echo.py learn {args.out} --player {args.user}")
+    if args.site == "chesscom" and speeds:
+        print("Note: Chess.com downloads aren't filtered by speed here; use `learn --speed` to filter while training.")
+
+
 def main():
     p = argparse.ArgumentParser(description="Echo: a chess engine that plays your style, correctly.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -700,6 +774,15 @@ def main():
     l.add_argument("--min-opp-rating", type=int, help="only use games against opponents rated at least this")
     l.add_argument("--resume", help="continue training an existing style.npz with new games")
     l.set_defaults(fn=learn)
+
+    f = sub.add_parser("fetch", help="download your games from Lichess or Chess.com")
+    f.add_argument("user", help="your username on that site")
+    f.add_argument("--site", choices=["lichess", "chesscom"], default="lichess")
+    f.add_argument("--max", type=int, default=500, help="how many games (newest first), default 500")
+    f.add_argument("--speed", help="Lichess only: bullet,blitz,rapid,classical (comma separated)")
+    f.add_argument("--rated", action="store_true", help="Lichess only: rated games only")
+    f.add_argument("--out", default="games.pgn")
+    f.set_defaults(fn=fetch_cmd)
 
     pr = sub.add_parser("profile", help="show your style profile and accuracy")
     pr.add_argument("style")
