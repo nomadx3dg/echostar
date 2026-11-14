@@ -296,6 +296,32 @@ def test_fetch_chesscom_walks_archives_newest_first(mock_server):
     assert text.count("[Event ") == 2 and "bob_old" not in text      # stopped after the newest month
 
 
+def numbered(n, tc="600"):
+    return "".join(f'[Event "g{i}"]\n[White "bob"]\n[Black "x"]\n[TimeControl "{tc}"]\n[Result "1-0"]\n\n1. e4 e5 1-0\n\n'
+                   for i in range(n))
+
+
+def test_chesscom_returns_exactly_max_newest_first(mock_server):
+    import json
+    base, routes = mock_server
+    routes["/pub/player/bob/games/archives"] = json.dumps({"archives": [f"{base}/m/1", f"{base}/m/2"]})
+    routes["/m/1/pgn"] = numbered(5)                 # older month
+    routes["/m/2/pgn"] = numbered(4)                 # newer month; its last game (g3) is the newest
+    games = echo.split_games(echo.fetch_chesscom("bob", 6, base=base))
+    assert len(games) == 6
+    assert 'Event "g3"' in games[0] and 'Event "g0"' in games[3]      # newest month, reversed
+    assert 'Event "g4"' in games[4]                                   # then the older month, newest first
+
+
+def test_chesscom_speed_filter(mock_server):
+    import json
+    base, routes = mock_server
+    routes["/pub/player/bob/games/archives"] = json.dumps({"archives": [f"{base}/m/1"]})
+    routes["/m/1/pgn"] = numbered(3, "60") + numbered(2, "600")
+    games = echo.split_games(echo.fetch_chesscom("bob", 10, {"rapid"}, base=base))
+    assert len(games) == 2 and all(echo.game_speed(g) == "rapid" for g in games)
+
+
 def test_unknown_user_is_a_clear_error(mock_server):
     base, _ = mock_server
     with pytest.raises(SystemExit) as exc:

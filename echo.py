@@ -727,17 +727,33 @@ def fetch_lichess(user, max_games, speeds=None, rated=False, base=LICHESS_URL):
     return http_get(f"{base}/api/games/user/{user}?{query}", accept="application/x-chess-pgn")
 
 
-def fetch_chesscom(user, max_games, base=CHESSCOM_URL):
+def split_games(pgn_text):
+    """Split a PGN string into one string per game."""
+    import re
+    parts = re.split(r"(?m)^(?=\[Event )", pgn_text)
+    return [p.strip() for p in parts if p.strip().startswith("[Event ")]
+
+
+def game_speed(game_text):
+    import re
+    m = re.search(r'\[TimeControl "([^"]*)"\]', game_text)
+    return classify_speed(m.group(1)) if m else None
+
+
+def fetch_chesscom(user, max_games, speeds=None, base=CHESSCOM_URL):
+    """Newest `max_games` games, walking Chess.com's monthly archives from the latest month backwards."""
     import json as _json
     archives = _json.loads(http_get(f"{base}/pub/player/{user}/games/archives", "application/json")).get("archives", [])
-    chunks, total = [], 0
-    for url in reversed(archives):             # newest month first
-        text = http_get(url + "/pgn", "application/x-chess-pgn")
-        chunks.append(text)
-        total += text.count("[Event ")
-        if total >= max_games:
+    games = []
+    for url in reversed(archives):                       # newest month first
+        month = split_games(http_get(url + "/pgn", "application/x-chess-pgn"))
+        month.reverse()                                  # each month's file lists oldest game first
+        if speeds:
+            month = [g for g in month if game_speed(g) in speeds]
+        games.extend(month)
+        if len(games) >= max_games:
             break
-    return "\n\n".join(chunks)
+    return "\n\n".join(games[:max_games]) + "\n"
 
 
 def fetch_cmd(args):
@@ -748,7 +764,7 @@ def fetch_cmd(args):
     if args.site == "lichess":
         text = fetch_lichess(args.user, args.max, speeds, args.rated)
     else:
-        text = fetch_chesscom(args.user, args.max)
+        text = fetch_chesscom(args.user, args.max, set(speeds) if speeds else None)
     count = text.count("[Event ")
     if count == 0:
         sys.exit("No games came back. Check the username, and loosen --speed / --rated if you used them.")
@@ -756,8 +772,6 @@ def fetch_cmd(args):
         fh.write(text)
     print(f"Saved {count} games to {args.out}")
     print(f"Next: python echo.py learn {args.out} --player {args.user}")
-    if args.site == "chesscom" and speeds:
-        print("Note: Chess.com downloads aren't filtered by speed here; use `learn --speed` to filter while training.")
 
 
 def main():
@@ -779,7 +793,7 @@ def main():
     f.add_argument("user", help="your username on that site")
     f.add_argument("--site", choices=["lichess", "chesscom"], default="lichess")
     f.add_argument("--max", type=int, default=500, help="how many games (newest first), default 500")
-    f.add_argument("--speed", help="Lichess only: bullet,blitz,rapid,classical (comma separated)")
+    f.add_argument("--speed", help="only these speeds: bullet,blitz,rapid,classical (comma separated)")
     f.add_argument("--rated", action="store_true", help="Lichess only: rated games only")
     f.add_argument("--out", default="games.pgn")
     f.set_defaults(fn=fetch_cmd)

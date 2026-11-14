@@ -54,8 +54,8 @@ If `pip install numpy` fails on your phone, use `pkg install python-numpy` as ab
 
 ```bash
 python echo.py fetch YourName                                  # Lichess, newest 500 games
-python echo.py fetch YourName --speed blitz,rapid --rated      # Lichess filters
-python echo.py fetch YourName --site chesscom --max 300
+python echo.py fetch YourName --speed blitz,rapid --rated      # Lichess filters (--rated is Lichess only)
+python echo.py fetch YourName --site chesscom --max 300 --speed blitz,rapid
 ```
 
 Or export a PGN by hand (Lichess: profile, Export games; Chess.com: Settings, Download). `--player` must match your
