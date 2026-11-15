@@ -18,6 +18,57 @@ pub struct Validation {
     pub random_top1: f64,
 }
 
+/// The behavior dimensions and their labels, in the order `personality.py` lists them.
+pub const DIMENSIONS: [(&str, &str); 7] = [
+    ("aggression", "Aggression"),
+    ("risk_tolerance", "Risk tolerance"),
+    ("tactical_appetite", "Tactical appetite"),
+    ("simplification", "Simplification preference"),
+    ("initiative", "Initiative preference"),
+    ("positional", "Positional preference"),
+    ("endgame_activity", "Endgame king activity"),
+];
+const DIMENSIONS_VERSION: u64 = 1;
+const MIN_POSITIONS: f64 = 50.0;
+
+/// One behavior dimension measured against a uniformly random legal move (see docs/PERSONALITY.md).
+#[derive(Debug, Clone)]
+pub struct Behavior {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub n: u64,
+    pub observed_rate: f64,
+    pub expected_rate: f64,
+    pub z: f64,
+    pub z_halves: [f64; 2],
+    pub verdict: String,
+}
+
+/// Plain-language reading of a z score. Mirrors `personality.verdict`: |z| >= 3 for "clear", and both halves of the
+/// games (alternate games) must point the same way as the whole.
+pub fn verdict(n: f64, z: f64, z_halves: [f64; 2]) -> String {
+    if n < MIN_POSITIONS {
+        return "too little data".to_string();
+    }
+    let consistent = z_halves.iter().all(|h| h * z > 0.0);
+    let direction = if z > 0.0 { "more" } else { "less" };
+    if z.abs() >= 3.0 && consistent {
+        format!("clear: {direction} than random")
+    } else if z.abs() >= 2.0 && consistent {
+        format!("weak: {direction} than random")
+    } else {
+        "not distinguishable from random".to_string()
+    }
+}
+
+fn cell_z(c: &[f64; 4]) -> f64 {
+    if c[3] > 0.0 {
+        (c[1] - c[2]) / c[3].sqrt()
+    } else {
+        0.0
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Dims {
     input: usize,
@@ -39,6 +90,9 @@ struct Header {
     book: HashMap<String, HashMap<String, u32>>,
     #[serde(default)]
     validation: Option<Validation>,
+    /// Read leniently (see `Model::behavior`): a newer or malformed block must never stop a model from loading.
+    #[serde(default)]
+    dimensions: Option<serde_json::Value>,
     dims: Dims,
     feature_names: Vec<String>,
 }
@@ -53,12 +107,48 @@ pub struct Model {
     pub validation: Option<Validation>,
     /// Set when the file was an older format that was migrated in memory (the file itself is never modified).
     pub migrated_from: Option<u32>,
+    dimensions: Option<serde_json::Value>,
     hidden: usize,
     w1: Vec<f64>,  // 768 x hidden
     b1: Vec<f64>,  // hidden
     w2t: Vec<f64>, // NUM_MOVES x hidden
     b2: Vec<f64>,  // NUM_MOVES
     w: Vec<f64>,   // features
+}
+
+impl Model {
+    /// The measured behavior dimensions and the number of games they cover, or None when the profile has none
+    /// (it predates them, or was written by a newer format this build does not read).
+    pub fn behavior(&self) -> Option<(u64, Vec<Behavior>)> {
+        let block = self.dimensions.as_ref()?;
+        if block.get("version")?.as_u64()? != DIMENSIONS_VERSION {
+            return None;
+        }
+        let games = block.get("games")?.as_u64()?;
+        let tally = block.get("tally")?;
+        let mut out = Vec::new();
+        for (name, label) in DIMENSIONS {
+            let halves: [[f64; 4]; 2] = match tally.get(name) {
+                Some(v) => serde_json::from_value(v.clone()).ok()?,
+                None => [[0.0; 4]; 2],
+            };
+            let total: Vec<f64> = (0..4).map(|i| halves[0][i] + halves[1][i]).collect();
+            let n = total[0];
+            let z_halves = [cell_z(&halves[0]), cell_z(&halves[1])];
+            let z = cell_z(&[total[0], total[1], total[2], total[3]]);
+            out.push(Behavior {
+                name,
+                label,
+                n: n as u64,
+                observed_rate: if n > 0.0 { total[1] / n } else { 0.0 },
+                expected_rate: if n > 0.0 { total[2] / n } else { 0.0 },
+                z,
+                z_halves,
+                verdict: verdict(n.trunc(), z, z_halves),
+            });
+        }
+        Some((games, out))
+    }
 }
 
 fn take_f32(bytes: &[u8], pos: &mut usize, n: usize) -> Result<Vec<f64>, String> {
@@ -122,6 +212,7 @@ impl Model {
             book: h.book,
             validation: h.validation,
             migrated_from: (version == LEGACY_VERSION).then_some(version),
+            dimensions: h.dimensions,
             hidden: hid,
             w1,
             b1,
@@ -201,5 +292,20 @@ impl Brain {
             Some(m) => m.scores(pos, moves),
             None => vec![0.0; moves.len()],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verdict_thresholds() {
+        assert_eq!(verdict(10.0, 9.0, [5.0, 5.0]), "too little data");
+        assert_eq!(verdict(200.0, 3.4, [2.5, 2.4]), "clear: more than random");
+        assert_eq!(verdict(200.0, -3.4, [-2.5, -2.4]), "clear: less than random");
+        assert_eq!(verdict(200.0, 3.4, [4.0, -0.3]), "not distinguishable from random"); // the halves disagree
+        assert_eq!(verdict(200.0, 2.4, [1.8, 1.6]), "weak: more than random");
+        assert_eq!(verdict(200.0, 1.9, [1.5, 1.4]), "not distinguishable from random");
     }
 }

@@ -16,6 +16,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import echo  # noqa: E402
+import personality  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rust", "tests", "data")
 
@@ -66,8 +67,21 @@ def main():
         moves = list(board.legal_moves)
         if moves:
             book[echo.book_key(board)] = {m.uci(): rng.integers(1, 6).item() for m in moves[:3]}
+    # Behavior measurements for the Rust side to reproduce: many decisions over the golden positions, mostly
+    # forcing moves when one exists (so some dimensions get a clear verdict and others stay unclear).
+    pick = random.Random(5)
+    tally = personality.new_tally()
+    for i in range(12):
+        for fen in fens:
+            board = chess.Board(fen)
+            moves = list(board.legal_moves)
+            if not moves:
+                continue
+            forcing = [m for m in moves if board.is_capture(m) or board.gives_check(m)]
+            move = pick.choice(forcing) if forcing and pick.random() < 0.85 else pick.choice(moves)
+            personality.observe(board, move, moves, tally, half=i % 2)
     meta = {"player": "Golden", "games": 1, "positions": 1, "played_rate": {}, "baseline_rate": {},
-            "book": book, "validation": None}
+            "book": book, "validation": None, "dimensions": personality.to_meta(tally, 12)}
 
     os.makedirs(OUT, exist_ok=True)
     echo.export_echo(net, meta, os.path.join(OUT, "golden.echo"))
@@ -99,7 +113,7 @@ def main():
             "scores": brain.scores(board, moves),
         })
     with open(os.path.join(OUT, "golden.json"), "w") as fh:
-        json.dump({"feature_names": echo.FEATURES, "cases": cases}, fh)
+        json.dump({"feature_names": echo.FEATURES, "cases": cases, "dimensions": personality.summarize(tally)}, fh)
     print(f"{len(cases)} positions, {sum(len(c['moves']) for c in cases)} moves -> {os.path.abspath(OUT)}")
 
 

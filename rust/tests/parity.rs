@@ -101,3 +101,56 @@ fn v1_model_migrates_without_changing_scores() {
     }
     assert!(checked > 500 && underpromotions >= 12, "checked {checked} moves, {underpromotions} under-promotions");
 }
+
+#[derive(Deserialize)]
+struct PySummary {
+    n: u64,
+    observed_rate: f64,
+    expected_rate: f64,
+    z: f64,
+    z_halves: [f64; 2],
+    verdict: String,
+}
+
+/// The behavior measurements Rust reads from the profile must equal what Python computes from the same tally:
+/// counts, rates, z scores (whole and halves) and the plain-language verdict.
+#[test]
+fn behavior_dimensions_match_python() {
+    use echo_rs::model::DIMENSIONS;
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{dir}/golden.json")).unwrap()).unwrap();
+    let expected: std::collections::HashMap<String, PySummary> =
+        serde_json::from_value(raw["dimensions"].clone()).unwrap();
+
+    let model = Model::load(&format!("{dir}/golden.echo")).unwrap();
+    let (games, rows) = model.behavior().expect("the golden model has behavior measurements");
+    assert_eq!((games, rows.len()), (12, DIMENSIONS.len()));
+    let mut verdicts = std::collections::HashSet::new();
+    for b in &rows {
+        let py = &expected[b.name];
+        assert_eq!(b.n, py.n, "{}", b.name);
+        assert!((b.observed_rate - py.observed_rate).abs() < 1e-9, "{} observed", b.name);
+        assert!((b.expected_rate - py.expected_rate).abs() < 1e-9, "{} expected", b.name);
+        assert!((b.z - py.z).abs() < 1e-9, "{} z", b.name);
+        for h in 0..2 {
+            assert!((b.z_halves[h] - py.z_halves[h]).abs() < 1e-9, "{} half {h}", b.name);
+        }
+        assert_eq!(b.verdict, py.verdict, "{}", b.name);
+        verdicts.insert(b.verdict.clone());
+    }
+    assert!(verdicts.len() >= 2, "the fixture should exercise more than one verdict: {verdicts:?}");
+}
+
+/// A model without the block (older profiles, the legacy v1 fixture) loads and simply has no behavior.
+#[test]
+fn models_without_dimensions_still_load() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
+    // golden_v1.echo carries the same metadata, so strip it by loading a copy with the block renamed
+    let mut bytes = std::fs::read(format!("{dir}/golden_v1.echo")).unwrap();
+    let key = b"\"dimensions\"";
+    let at = bytes.windows(key.len()).position(|w| w == key).expect("fixture has the block");
+    bytes[at + 1..at + 1 + 10].copy_from_slice(b"xxxxxxxxxx"); // same length: the header stays valid JSON
+    let m = Model::from_bytes(&bytes).unwrap();
+    assert!(m.behavior().is_none());
+}

@@ -105,6 +105,24 @@ fn print_profile(m: &Model) {
             rate(&m.baseline_rate, n) * 100.0
         );
     }
+    match m.behavior() {
+        Some((games, rows)) => {
+            println!(
+                "\n  Behavior, measured from {games} games against a random legal move (z: 0 = random, |z| >= 3 = clear):"
+            );
+            for b in rows {
+                println!(
+                    "    {:<27} you {:5.1}% vs random {:5.1}%  z {:+5.1}  {}",
+                    b.label,
+                    b.observed_rate * 100.0,
+                    b.expected_rate * 100.0,
+                    b.z,
+                    b.verdict
+                );
+            }
+        }
+        None => println!("\n  Behavior: not measured (this profile predates it)."),
+    }
     println!("\n  Opening book: {} positions from your games", m.book.len());
     match &m.validation {
         Some(v) => {
