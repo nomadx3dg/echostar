@@ -32,6 +32,8 @@ import chess.engine
 import chess.pgn
 import numpy as np
 
+import personality
+
 # ----------------------------------------------------------------------------
 # Hand-made style features (readable; also feed the net as a prior)
 # ----------------------------------------------------------------------------
@@ -290,12 +292,14 @@ def learn(args):
     played_sum = np.zeros(len(FEATURES))
     base_sum = np.zeros(len(FEATURES))
     n_pos = 0
-    for game, me in games:
+    tally = personality.new_tally()
+    for game_no, (game, me) in enumerate(games):
         board, samples = game.board(), []
         for ply, move in enumerate(game.mainline_moves()):
             if board.turn == me:
                 moves = list(board.legal_moves)
                 if move in moves:
+                    personality.observe(board, move, moves, tally, half=game_no % 2)
                     F = np.array([features(board, m) for m in moves])
                     t = moves.index(move)
                     samples.append((encode(board), np.array([move_index(board, m) for m in moves]), F, t))
@@ -347,7 +351,13 @@ def learn(args):
 
     # Merge with the old model's statistics when resuming
     total = n_pos
+    dim_games = len(games)
     if old:
+        old_tally, old_dim_games = personality.from_meta(old.get("dimensions"))
+        if old_tally:
+            tally, dim_games = personality.merge_tally(tally, old_tally), dim_games + old_dim_games
+        else:
+            print("Note: the old profile has no behavior measurements, so they cover only the games added now.")
         total += old["positions"]
         played_sum = played_sum + np.array([old["played_rate"][n] for n in FEATURES]) * old["positions"]
         base_sum = base_sum + np.array([old["baseline_rate"][n] for n in FEATURES]) * old["positions"]
@@ -364,6 +374,7 @@ def learn(args):
         "baseline_rate": dict(zip(FEATURES, (base_sum / total).tolist())),
         "book": {k: dict(v) for k, v in book.items()},
         "validation": net.evaluate(val) or (old or {}).get("validation"),
+        "dimensions": personality.to_meta(tally, dim_games),
     }
     np.savez_compressed(args.out, meta=json.dumps(meta), **net.params())
     print(f"\nSaved style model to {args.out}")
@@ -429,6 +440,15 @@ def tendency_rows(meta):
     return sorted(rows, key=lambda r: -abs(r[0]))
 
 
+def dimension_rows(meta):
+    """[(Dimension, summary)] for the behavior dimensions, or None when the profile has none."""
+    tally, _ = personality.from_meta(meta.get("dimensions"))
+    if tally is None:
+        return None
+    summary = personality.summarize(tally)
+    return [(d, summary[d.name]) for d in personality.DIMENSIONS]
+
+
 def repertoire(meta):
     """Most common opening moves from the book: [(label, 'Nf3 (4x), d4 (2x)')]."""
     book = meta.get("book", {})
@@ -459,6 +479,16 @@ def print_profile(meta):
     for diff, n in tendency_rows(meta)[:10]:
         print(f"  {'+' if diff > 0 else '-'} {n:<24} you {meta['played_rate'][n]:5.1%}  "
               f"vs random {meta['baseline_rate'][n]:5.1%}")
+    rows = dimension_rows(meta)
+    if rows is None:
+        print("\n  Behavior: not measured (this profile predates it; `learn --resume` adds it for the new games).")
+    else:
+        games = meta["dimensions"]["games"]
+        print(f"\n  Behavior, measured from {games} games against a random legal move "
+              f"(z: 0 = random, |z| >= 3 = clear):")
+        for dim, s in rows:
+            print(f"    {dim.label:<27} you {s['observed_rate']:5.1%} vs random {s['expected_rate']:5.1%}  "
+                  f"z {s['z']:+5.1f}  {s['verdict']}")
     reps = repertoire(meta)
     print(f"\n  Opening book: {len(meta['book'])} positions from your games")
     for label, text in reps:
@@ -479,6 +509,17 @@ def export_markdown(meta):
            "| Move type | You | Random legal move | Difference |", "|---|---|---|---|"]
     for diff, n in tendency_rows(meta):
         out.append(f"| {n} | {meta['played_rate'][n]:.1%} | {meta['baseline_rate'][n]:.1%} | {diff:+.1%} |")
+    rows = dimension_rows(meta)
+    out += ["", "## Behavior", ""]
+    if rows is None:
+        out.append("Not measured: this profile predates behavior measurement.")
+    else:
+        out += ["Measured against a uniformly random legal move (z = 0 means no difference from random). "
+                "Compare profiles with each other; do not read one profile as 'high' or 'low' on its own.", "",
+                "| Dimension | What is measured | You | Random | z | Reading |", "|---|---|---|---|---|---|"]
+        for dim, s in rows:
+            out.append(f"| {dim.label} | {dim.description} | {s['observed_rate']:.1%} | {s['expected_rate']:.1%} "
+                       f"| {s['z']:+.1f} | {s['verdict']} |")
     out += ["", "## Opening repertoire", ""]
     out += [f"- **{label}:** {text}" for label, text in repertoire(meta)] or ["No opening data."]
     v = meta.get("validation")
