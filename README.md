@@ -136,6 +136,10 @@ cd rust && cargo build --release
 ./target/release/echo-rs uci --style ../style.echo       # run as a UCI engine
 ```
 
+`profile` also reports seven behavior dimensions (aggression, risk, tactical appetite, simplification, initiative,
+positional play, endgame king activity), each measured against a random legal move and validated on synthetic players with
+planted preferences. See [docs/PERSONALITY.md](docs/PERSONALITY.md) for what they mean and what they do not.
+
 Profiles trained before promotion-aware moves (format v1) still load: both the Python and Rust loaders migrate them in
 memory with no change in scores, and say so. See [docs/FORMAT.md](docs/FORMAT.md).
 

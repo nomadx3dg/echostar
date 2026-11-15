@@ -58,3 +58,19 @@ tell the promotion pieces apart.
 
 `tools/make_golden.py` writes `golden.echo` (v2), `golden_v1.echo` (the same weights in the v1 layout) and the expected
 scores for both, so `cargo test` checks the Rust migration against Python.
+
+## Optional metadata: behavior dimensions
+
+Both the Python profile (`profile_version` 2) and the `.echo` header can carry a `dimensions` block. It is additive: it
+does not change any tensor, so it needs no new version, and readers that do not know it ignore it.
+
+```json
+"dimensions": {"version": 1, "games": 60,
+               "tally": {"aggression": [[n, observed, expected, variance], [n, observed, expected, variance]], "...": []}}
+```
+
+Each dimension has two cells (alternate games go to alternate cells) so a reader can check that both halves agree. A cell is
+`[positions, sum observed, sum expected, sum variance]`; cells add when profiles are resumed. `games` is how many games the
+tally covers, which can be fewer than the profile's `games` after resuming an older profile. The definitions and how to
+read z are in [PERSONALITY.md](PERSONALITY.md). A reader must treat a missing block, or a `version` it does not know, as
+"not measured". `echo-rs` does so and never fails to load a model because of this block.

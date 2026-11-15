@@ -36,13 +36,13 @@ cost (MultiPV, gate, nodes per move) was **not measured**: Stockfish is not inst
 | 2 | Python and Rust disagreed on edge cases (no engine lines, mate in the gate, negative clocks). | Fixed (first series) |
 | 3 | `moves_into_attack` looks at the position before the move: it ignores that the moving piece changes which pieces attack the square (x-rays, a vacated blocker) and ignores defenders, so a defended square counts as "attacked". | Open: needs a versioned feature set (changes scores) |
 | 4 | `even_or_winning_trade` compares victim and mover values only; there is no recapture or exchange evaluation. | Open: same |
-| 5 | Features are move-local. Nothing describes game phase, material balance, king safety or pawn structure, so the model cannot make personality depend on the situation. | Open: roadmap Phases 3 and 4 |
+| 5 | Features are move-local. Nothing describes game phase, material balance, king safety or pawn structure, so the model cannot make personality depend on the situation. | Phase 3 added measured behavior dimensions (see PERSONALITY.md); making the model itself context-aware is still open (Phase 4) |
 | 6 | The epoch with the best held-out loss is kept and that same held-out set is then reported, so the reported accuracy is slightly optimistic. Splitting is by game (no leakage between train and held-out), but there is no third set. | Open: Phase 7 |
 | 7 | Held-out metrics are reported once there are 10 games, however few positions that is. | Open: Phase 7 |
 | 8 | The blunder gate compares a deeper evaluation of the chosen move with the shallower evaluation of the best move, which biases the check by the depth difference. Fixing it needs measurements. | Open: Phase 5 and 10 |
 | 9 | With no style file, `balanced` and `faithful` pick randomly among safe moves rather than the engine's best, which differs from the "plain engine" wording. | Open |
 | 10 | Everything was validated on synthetic data only. | Open: roadmap M2 |
 
-## Remaining roadmap phases not started
-3 (personality dimensions), 4 (position-aware features), 5 (adaptive gate), 6 (feature corrections, see findings 3 and 4),
+## Roadmap phases still to do
+3 (personality dimensions: done, with the caveats in PERSONALITY.md), 4 (position-aware features), 5 (adaptive gate), 6 (feature corrections, see findings 3 and 4),
 7 (metrics), 8 (coach), 9 (multi-profile management), 10 (benchmarks and self-play).
