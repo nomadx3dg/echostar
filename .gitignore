@@ -8,3 +8,5 @@ __pycache__/
 stockfish/
 games/
 rust/target/
+.coverage
+.ruff_cache/
