@@ -1,0 +1,18 @@
+split 0: 1337 test positions
+split 1: 1330 test positions
+
+Habit 'queenside' for SynthQueenside (SYNTHETIC; habit planted at beta 2.0). Test positions only, 2 splits.
+
+| system | share of moves with the habit |
+|---|---|
+| player's own moves | 59.4% (splits: 58.6, 60.1) |
+| stockfish best move | 28.4% (splits: 29.2, 27.6) |
+| random safe move (band 50, no style) | 30.6% (splits: 31.3, 29.9) |
+| chooser + echostar (existing) | 44.8% (splits: 43.8, 45.8) |
+| raw argmax, echostar (existing) | 71.1% (splits: 69.5, 72.6) |
+| chooser + echostar+maia training teacher (mix 0.25) | 40.0% (splits: 40.2, 39.9) |
+| raw argmax, echostar+maia training teacher (mix 0.25) | 60.0% (splits: 61.0, 59.0) |
+| chooser + echostar~maia runtime blend (mu 0.25) | 39.7% (splits: 39.4, 40.1) |
+| raw argmax, echostar~maia runtime blend (mu 0.25) | 56.8% (splits: 56.5, 57.1) |
+
+Chance for the chooser: the average share of safe candidates that have the habit is 30.4%. A system with no style knowledge should sit near that line; a system that learned the habit sits above it, toward the player's own rate.

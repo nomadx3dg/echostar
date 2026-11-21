@@ -66,7 +66,7 @@ Lichess supports bot accounts through its Bot API; `lichess-bot` is the standard
 
 **Exit test:** the bot accepts a challenge, plays a full game, and finishes without a crash, forfeit, or illegal move.
 **Risks:** read Lichess's current bot rules before step 3. Name and profile must make clear it is a bot.
-Stockfish is GPL: if you ship its binary together with Echo, pick a compatible license and comply with it.
+Echo is GPL-3.0-only (see `LICENSE`). Stockfish is GPL too: if you ship its binary together with Echo, comply with its license as well.
 
 ## M6. Lichess bot, running unattended (later)
 - Run on an always-on machine (a Raspberry Pi, a cheap VPS, or a spare phone in Termux) under a service manager
@@ -87,6 +87,8 @@ Stockfish is GPL: if you ship its binary together with Echo, pick a compatible l
 The original "Wisp" idea: reduce the dependence on a full Stockfish process.
 - Distill a small quantized evaluator (1 to 2 MB int8) and a learned pruner; run the truth engine in Rust.
 - Replace the hand-made features with a stronger, Maia-style move predictor conditioned on rating and clock time.
+  (First measurement, synthetic data only: using Maia as a teacher did not improve EchoStar and diluted personal style;
+  see [docs/MAIA.md](docs/MAIA.md). Re-test on real games in M2 before building on it.)
 - Mobile app (Flutter or native) calling the Rust engine through FFI; WebAssembly build for the browser.
 
 **Exit test:** equal-nodes or equal-energy comparison against Stockfish; see M4 for the method.

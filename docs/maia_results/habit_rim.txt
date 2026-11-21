@@ -1,0 +1,18 @@
+split 0: 1294 test positions
+split 1: 1323 test positions
+
+Habit 'rim' for SynthRim (SYNTHETIC; habit planted at beta 2.0). Test positions only, 2 splits.
+
+| system | share of moves with the habit |
+|---|---|
+| player's own moves | 54.2% (splits: 55.0, 53.4) |
+| stockfish best move | 18.0% (splits: 18.6, 17.4) |
+| random safe move (band 50, no style) | 22.3% (splits: 23.4, 21.1) |
+| chooser + echostar (existing) | 33.5% (splits: 35.9, 31.0) |
+| raw argmax, echostar (existing) | 56.1% (splits: 60.1, 52.0) |
+| chooser + echostar+maia training teacher (mix 0.25) | 29.5% (splits: 32.3, 26.6) |
+| raw argmax, echostar+maia training teacher (mix 0.25) | 42.9% (splits: 48.2, 37.5) |
+| chooser + echostar~maia runtime blend (mu 0.25) | 26.9% (splits: 28.6, 25.2) |
+| raw argmax, echostar~maia runtime blend (mu 0.25) | 37.4% (splits: 42.3, 32.5) |
+
+Chance for the chooser: the average share of safe candidates that have the habit is 22.6%. A system with no style knowledge should sit near that line; a system that learned the habit sits above it, toward the player's own rate.

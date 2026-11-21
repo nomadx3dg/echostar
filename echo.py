@@ -161,13 +161,23 @@ class StyleNet:
             F = np.array([features(board, m) for m in moves])
         return self.W2T[midx] @ h + self.b2[midx] + F @ self.w
 
-    def step(self, sample, lr):
-        act, midx, F, t = sample
+    def step(self, sample, lr, mix=0.0):
+        """One SGD step. `sample` is (active inputs, move units, features, index of the move played) and may carry a
+        fifth element: a teacher distribution over the same legal moves (see maia_teacher.py). With `mix` > 0 the
+        training target becomes (1 - mix) * the move played + mix * the teacher; with `mix` = 0 (the default) the
+        teacher is ignored and this is the original update. The returned loss is always the plain cross-entropy
+        on the move played, so it stays comparable across runs."""
+        act, midx, F, t = sample[:4]
+        q = sample[4] if len(sample) > 4 else None
         pre = self.W1[act].sum(0) + self.b1
         h = np.maximum(pre, 0)
         p = softmax(self.W2T[midx] @ h + self.b2[midx] + F @ self.w)
         d = p.copy()
-        d[t] -= 1.0
+        if q is not None and mix > 0:
+            d -= mix * q
+            d[t] -= 1.0 - mix
+        else:
+            d[t] -= 1.0
         dh = d @ self.W2T[midx]
         np.add.at(self.W2T, midx, -lr * np.outer(d, h))
         np.add.at(self.b2, midx, -lr * d)
@@ -181,8 +191,9 @@ class StyleNet:
         if not samples:
             return None
         top1 = top3 = rand = loss = 0
-        for act, midx, F, t in samples:
-            lg = self.W2T[midx] @ np.maximum(self.W1[act].sum(0) + self.b1, 0) + self.b2[midx] + F @ self.w
+        for sample in samples:
+            act, midx, F, t = sample[:4]
+            lg =self.W2T[midx] @ np.maximum(self.W1[act].sum(0) + self.b1, 0) + self.b2[midx] + F @ self.w
             order = np.argsort(-lg)
             top1 += order[0] == t
             top3 += t in order[:3]
@@ -278,6 +289,42 @@ def read_games(pgn_path, player, speeds=None, min_opp_rating=None):
     return games, skipped
 
 
+def build_teacher(args):
+    """A Maia teacher from --maia-weights (+ --lc0) and/or --maia-cache, or None when neither was given."""
+    weights, cache = getattr(args, "maia_weights", None), getattr(args, "maia_cache", None)
+    if not weights and not cache:
+        return None
+    import maia_teacher
+    try:
+        inner = None
+        if weights:
+            lc0 = getattr(args, "lc0", None) or shutil.which("lc0")
+            if not lc0:
+                sys.exit("lc0 not found. Install it or pass --lc0 /path/to/lc0 (Maia-1 weights run on lc0).")
+            inner = maia_teacher.Lc0Teacher(lc0, weights)
+        return maia_teacher.CachingTeacher(cache, inner) if cache else inner
+    except maia_teacher.TeacherError as exc:
+        sys.exit(f"Maia teacher: {exc}")
+
+
+def open_teacher(args):
+    """(teacher, mix) from the optional Maia flags of `learn`; (None, 0.0) when none are given.
+
+    Maia is only a training-time helper: without these flags nothing here runs and maia_teacher is never imported."""
+    mix = float(getattr(args, "maia_mix", 0.0) or 0.0)
+    given = getattr(args, "maia_weights", None) or getattr(args, "maia_cache", None)
+    if mix == 0 and not given:
+        return None, 0.0
+    if not 0 <= mix < 1:
+        sys.exit("--maia-mix must be at least 0 and below 1 (0 = ignore Maia).")
+    if mix == 0:
+        sys.exit("Maia options were given but --maia-mix is 0, so Maia would have no effect. Try --maia-mix 0.25.")
+    teacher = build_teacher(args)
+    if teacher is None:
+        sys.exit("--maia-mix needs a teacher: give --maia-weights (and lc0) or a --maia-cache file.")
+    return teacher, mix
+
+
 def learn(args):
     if not os.path.exists(args.pgn):
         sys.exit(f"PGN file not found: {args.pgn}")
@@ -287,29 +334,44 @@ def learn(args):
         sys.exit(f"No usable games found for player '{args.player}'. "
                  f"Check the name matches the PGN headers (and your filters).")
     print(f"Found {len(games)} games ({skipped} skipped by filters). Reading your positions...")
+    teacher, mix = open_teacher(args)
+    if teacher is not None:
+        print(f"Maia teacher {getattr(teacher, 'name', '?')}: soft-target weight {mix} "
+              f"(your own moves still carry weight {1 - mix:g}).")
 
     per_game, book = [], {}
     played_sum = np.zeros(len(FEATURES))
     base_sum = np.zeros(len(FEATURES))
     n_pos = 0
     tally = personality.new_tally()
-    for game_no, (game, me) in enumerate(games):
-        board, samples = game.board(), []
-        for ply, move in enumerate(game.mainline_moves()):
-            if board.turn == me:
-                moves = list(board.legal_moves)
-                if move in moves:
-                    personality.observe(board, move, moves, tally, half=game_no % 2)
-                    F = np.array([features(board, m) for m in moves])
-                    t = moves.index(move)
-                    samples.append((encode(board), np.array([move_index(board, m) for m in moves]), F, t))
-                    played_sum += F[t]
-                    base_sum += F.mean(0)
-                    n_pos += 1
-                if ply < BOOK_PLIES:
-                    book.setdefault(book_key(board), Counter())[move.uci()] += 1
-            board.push(move)
-        per_game.append(samples)
+    try:
+        for game_no, (game, me) in enumerate(games):
+            board, samples = game.board(), []
+            for ply, move in enumerate(game.mainline_moves()):
+                if board.turn == me:
+                    moves = list(board.legal_moves)
+                    if move in moves:
+                        personality.observe(board, move, moves, tally, half=game_no % 2)
+                        F = np.array([features(board, m) for m in moves])
+                        t = moves.index(move)
+                        sample = (encode(board), np.array([move_index(board, m) for m in moves]), F, t)
+                        if teacher is not None:
+                            sample += (teacher.probs(board, moves),)
+                        samples.append(sample)
+                        played_sum += F[t]
+                        base_sum += F.mean(0)
+                        n_pos += 1
+                    if ply < BOOK_PLIES:
+                        book.setdefault(book_key(board), Counter())[move.uci()] += 1
+                board.push(move)
+            per_game.append(samples)
+    except Exception as exc:                       # a teacher failure is a clear message, not a traceback
+        if teacher is None or exc.__class__.__name__ != "TeacherError":
+            raise
+        sys.exit(f"Maia teacher: {exc}")
+    finally:
+        if teacher is not None and hasattr(teacher, "close"):
+            teacher.close()                        # also flushes the cache file
 
     if n_pos == 0:
         sys.exit(f"Found {len(games)} games for '{args.player}', but none contain a move by them to learn from.")
@@ -338,7 +400,7 @@ def learn(args):
     for epoch in range(args.epochs):
         random.shuffle(train)
         lr = lr0 / (1 + 0.15 * epoch)
-        tl = sum(net.step(s, lr) for s in train) / max(1, len(train))
+        tl = sum(net.step(s, lr, mix) for s in train) / max(1, len(train))
         ev = net.evaluate(val)
         score = ev["loss"] if ev else tl
         msg = f"  epoch {epoch + 1:>2}/{args.epochs}  train loss {tl:.3f}"
@@ -376,6 +438,12 @@ def learn(args):
         "validation": net.evaluate(val) or (old or {}).get("validation"),
         "dimensions": personality.to_meta(tally, dim_games),
     }
+    if teacher is not None:
+        # Provenance only: no tensor or feature changed, so the format version stays (see docs/FORMAT.md).
+        meta["teacher"] = {"version": 1, "name": getattr(teacher, "name", None), "elo": getattr(teacher, "elo", None),
+                           "mix": mix, "games": len(games)}
+    elif old and old.get("teacher"):
+        meta["teacher"] = old["teacher"]
     np.savez_compressed(args.out, meta=json.dumps(meta), **net.params())
     print(f"\nSaved style model to {args.out}")
     print_profile(meta)
@@ -539,6 +607,71 @@ def profile(args):
         with open(args.export, "w") as fh:
             fh.write(export_markdown(meta))
         print(f"\nReadable summary written to {args.export}")
+
+
+def maia_compare(args):
+    """How close are your moves to what Maia predicts a typical player would choose? (Optional; needs a teacher.)
+
+    Reads your games only; trains nothing and writes nothing except the optional cache file."""
+    if not os.path.exists(args.pgn):
+        sys.exit(f"PGN file not found: {args.pgn}")
+    teacher = build_teacher(args)
+    if teacher is None:
+        sys.exit("maia-compare needs a Maia teacher: give --maia-weights (and lc0) or a --maia-cache file.")
+    speeds = set(args.speed.split(",")) if args.speed else None
+    games, _ = read_games(args.pgn, args.player, speeds)
+    if not games:
+        sys.exit(f"No usable games found for player '{args.player}'.")
+    brain = StyleBrain(args.style) if args.style else None
+    import maia_teacher
+    rows = []                                   # (maia prob of your move, your move rank, style rank, san, maia top san, p top)
+    try:
+        for game, me in games:
+            board = game.board()
+            for move in game.mainline_moves():
+                if board.turn == me:
+                    moves = list(board.legal_moves)
+                    if move in moves and len(moves) > 1:
+                        q = teacher.probs(board, moves)
+                        t = moves.index(move)
+                        top = int(np.argmax(q))
+                        srank = None
+                        if brain is not None:
+                            order = np.argsort(-np.array(brain.scores(board, moves)))
+                            srank = int(np.where(order == t)[0][0])
+                            style_top_is_maia = int(order[0]) == top
+                        else:
+                            style_top_is_maia = None
+                        rows.append((float(q[t]), int((q > q[t]).sum()), srank, style_top_is_maia,
+                                     board.san(move), board.san(moves[top]), float(q[top]), board.fen()))
+                board.push(move)
+    except maia_teacher.TeacherError as exc:
+        sys.exit(f"Maia teacher: {exc}")
+    finally:
+        teacher.close()
+    if not rows:
+        sys.exit("No positions to compare.")
+    n = len(rows)
+    top1 = sum(r[1] == 0 for r in rows) / n
+    top3 = sum(r[1] < 3 for r in rows) / n
+    nll = -sum(math.log(max(r[0], 1e-4)) for r in rows) / n
+    print(f"\nMaia comparison for {args.player}: {len(games)} games, {n} positions "
+          f"(teacher {getattr(teacher, 'name', '?')})")
+    print(f"  Maia's top move is the one you played: {top1:.1%}   (in its top 3: {top3:.1%})")
+    print(f"  Average probability Maia gave your move: {sum(r[0] for r in rows) / n:.1%}   "
+          f"(log-loss {nll:.2f})")
+    if brain is not None:
+        s1 = sum(r[2] == 0 for r in rows) / n
+        agree = sum(bool(r[3]) for r in rows) / n
+        print(f"  Your style model's top move is the one you played: {s1:.1%} "
+              f"(this is on all your games, so it includes training positions)")
+        print(f"  Your style model and Maia pick the same top move: {agree:.1%}")
+    print("\n  Moves you played that Maia found least typical (your move | Maia's favorite):")
+    for r in sorted(rows, key=lambda r: r[0])[:max(0, args.examples)]:
+        print(f"    {r[4]:<8} Maia gave it {r[0]:5.1%} | {r[5]} {r[6]:5.1%}   {r[7]}")
+    print("\n  Reading this: Maia models typical players at one rating band. A low match can mean an unusual style, "
+          "a rating far from the model's, or just a game full of forcing moves; it is not a verdict on your play. "
+          "It is also measured on your training games, not held out.")
 
 
 class StyleBrain:
@@ -938,7 +1071,25 @@ def main():
     l.add_argument("--speed", help="only use these speeds, comma separated: bullet,blitz,rapid,classical")
     l.add_argument("--min-opp-rating", type=int, help="only use games against opponents rated at least this")
     l.add_argument("--resume", help="continue training an existing style.npz with new games")
+    l.add_argument("--maia-mix", type=float, default=0.0, metavar="W",
+                   help="optional: blend a Maia teacher into the training target, 0 (default, off) to <1; "
+                        "needs --maia-weights with lc0, or --maia-cache")
+    l.add_argument("--maia-weights", metavar="FILE", help="Maia-1 weights (maia-1500.pb.gz); run through lc0")
+    l.add_argument("--lc0", metavar="PATH", help="path to the lc0 binary (default: lc0 on PATH)")
+    l.add_argument("--maia-cache", metavar="FILE",
+                   help="JSON-lines cache of Maia probabilities; filled when lc0 is given, replayed when it is not")
     l.set_defaults(fn=learn)
+
+    mc = sub.add_parser("maia-compare", help="compare your moves with what a Maia model predicts (needs lc0 + weights or a cache)")
+    mc.add_argument("pgn")
+    mc.add_argument("--player", required=True, help="your name exactly as in the PGN headers")
+    mc.add_argument("--maia-weights", metavar="FILE")
+    mc.add_argument("--lc0", metavar="PATH")
+    mc.add_argument("--maia-cache", metavar="FILE")
+    mc.add_argument("--style", help="also compare your style.npz with Maia")
+    mc.add_argument("--speed", help="only these speeds, comma separated")
+    mc.add_argument("--examples", type=int, default=8, help="how many of your most Maia-atypical moves to list")
+    mc.set_defaults(fn=maia_compare)
 
     f = sub.add_parser("fetch", help="download your games from Lichess or Chess.com")
     f.add_argument("user", help="your username on that site")

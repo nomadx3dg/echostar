@@ -74,3 +74,18 @@ Each dimension has two cells (alternate games go to alternate cells) so a reader
 tally covers, which can be fewer than the profile's `games` after resuming an older profile. The definitions and how to
 read z are in [PERSONALITY.md](PERSONALITY.md). A reader must treat a missing block, or a `version` it does not know, as
 "not measured". `echo-rs` does so and never fails to load a model because of this block.
+
+## Optional metadata: teacher provenance
+
+A profile trained with the optional Maia teacher (`echo.py learn --maia-mix W ...`, see [MAIA.md](MAIA.md)) records where its
+soft training targets came from. This is provenance only: no tensor, feature or dimension changed, so the format version stays
+`2`, a taught model has exactly the same size as an untaught one, and no new reader code is needed.
+
+```json
+"teacher": {"version": 1, "name": "lc0:maia-1500.pb.gz", "elo": 1500, "mix": 0.25, "games": 60}
+```
+
+`mix` is the weight of the teacher in the training target (`1 - mix` stays on the move the player actually made). The block is
+absent for models trained without a teacher, and is kept when such a model is later resumed without one. A reader must ignore
+it if missing or unknown; `echo-rs` does (`rust/tests/teacher_header.rs`). It contains no Maia weights or probabilities.
+

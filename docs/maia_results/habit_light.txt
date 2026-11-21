@@ -1,0 +1,18 @@
+split 0: 1335 test positions
+split 1: 1328 test positions
+
+Habit 'light' for SynthLight (SYNTHETIC; habit planted at beta 2.0). Test positions only, 2 splits.
+
+| system | share of moves with the habit |
+|---|---|
+| player's own moves | 68.9% (splits: 68.7, 69.1) |
+| stockfish best move | 36.8% (splits: 37.1, 36.5) |
+| random safe move (band 50, no style) | 36.4% (splits: 36.9, 35.9) |
+| chooser + echostar (existing) | 50.5% (splits: 49.1, 52.0) |
+| raw argmax, echostar (existing) | 66.8% (splits: 65.6, 68.1) |
+| chooser + echostar+maia training teacher (mix 0.25) | 47.5% (splits: 46.9, 48.2) |
+| raw argmax, echostar+maia training teacher (mix 0.25) | 57.7% (splits: 58.7, 56.8) |
+| chooser + echostar~maia runtime blend (mu 0.25) | 48.4% (splits: 48.6, 48.1) |
+| raw argmax, echostar~maia runtime blend (mu 0.25) | 58.8% (splits: 59.0, 58.5) |
+
+Chance for the chooser: the average share of safe candidates that have the habit is 37.9%. A system with no style knowledge should sit near that line; a system that learned the habit sits above it, toward the player's own rate.

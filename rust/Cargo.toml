@@ -3,6 +3,7 @@ name = "echo-rs"
 version = "0.1.0"
 edition = "2021"
 description = "Echo: a chess engine that plays your style correctly (Rust port)"
+license = "GPL-3.0-only"
 
 [dependencies]
 shakmaty = "0.27"

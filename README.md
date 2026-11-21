@@ -153,7 +153,11 @@ echo.py                 Python prototype and trainer (learn, profile, fetch, pla
 rust/                   Rust port: model, features, Stockfish client, chooser, terminal play, UCI mode
 tests/                  Python tests (chooser tests use a fake engine, so Stockfish isn't required)
 tools/make_golden.py    regenerates the Rust/Python parity vectors
-docs/                   ARCHITECTURE.md, FORMAT.md (the .echo model file)
+maia_teacher.py         OPTIONAL Maia teacher (training-time helper; never needed to play, not used by Rust)
+tools/synth_games.py    synthetic quirky players for tests and benchmarks (not real human behavior)
+tools/bench_maia.py     benchmark EchoStar with/without Maia on identical held-out positions
+tools/bench_habit.py    does a system reproduce a synthetic player's planted habit?
+docs/                   ARCHITECTURE.md, FORMAT.md (the .echo model file), MAIA.md (Maia study and licensing)
 ROADMAP.md              milestones, including the Lichess bot plan
 ```
 
@@ -165,6 +169,15 @@ make test                # Python and Rust
 ```
 Or run them separately: `python -m pytest` and `cargo test --manifest-path rust/Cargo.toml`.
 `make lint` runs clippy on the Rust code, the same check CI uses.
+
+## Optional: compare with Maia
+
+[Maia](https://github.com/CSSLab/maia-chess) predicts what a typical human of a given rating plays. EchoStar can use it as a
+yardstick, never as a replacement: `python echo.py maia-compare games.pgn --player Me --maia-weights maia-1500.pb.gz`
+shows how typical your moves are. It needs `lc0` and Maia weights installed separately; nothing is bundled and
+EchoStar works exactly as before without them. `learn --maia-mix` can also blend Maia into training. On synthetic data
+that did **not** help, so it is off by default. Read [docs/MAIA.md](docs/MAIA.md) for the measurements, the licensing
+(Maia-3's weights have no stated license) and why.
 
 ## Honest limits
 
@@ -192,4 +205,4 @@ Or run them separately: `python -m pytest` and `cargo test --manifest-path rust/
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design notes
 - [docs/FORMAT.md](docs/FORMAT.md): the `.echo` model format
 
-License: not chosen yet. (Note that Stockfish is GPL; if you ship its binary together with Echo, pick a compatible license.)
+License: [GNU GPL v3](LICENSE) (SPDX: GPL-3.0-only). Echo depends on GPL libraries (python-chess, shakmaty) and drives Stockfish, which is GPL too. If you ship Stockfish's binary together with Echo, comply with its license as well. Maia and lc0 are optional and are never bundled; see [docs/MAIA.md](docs/MAIA.md#5-licensing).
