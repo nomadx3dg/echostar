@@ -6,7 +6,6 @@ legacy v1 layout) and golden.json (positions with the
 features, input units, move indices, logits and style scores that Python computes for every legal move).
 """
 import json
-import math
 import os
 import random
 import sys

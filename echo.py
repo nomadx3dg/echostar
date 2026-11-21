@@ -193,7 +193,7 @@ class StyleNet:
         top1 = top3 = rand = loss = 0
         for sample in samples:
             act, midx, F, t = sample[:4]
-            lg =self.W2T[midx] @ np.maximum(self.W1[act].sum(0) + self.b1, 0) + self.b2[midx] + F @ self.w
+            lg = self.W2T[midx] @ np.maximum(self.W1[act].sum(0) + self.b1, 0) + self.b2[midx] + F @ self.w
             order = np.argsort(-lg)
             top1 += order[0] == t
             top3 += t in order[:3]
@@ -563,7 +563,7 @@ def print_profile(meta):
         print(f"    {label}: {text}")
     v = meta.get("validation")
     if v:
-        print(f"\n  Accuracy on games it never trained on:")
+        print("\n  Accuracy on games it never trained on:")
         print(f"    predicts your exact move {v['top1']:.1%} of the time (random guessing: {v['random_top1']:.1%})")
         print(f"    your move is in its top 3 {v['top3']:.1%} of the time")
     else:

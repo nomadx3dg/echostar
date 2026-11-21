@@ -72,7 +72,7 @@ def main():
         cands = [bm.candidates(eng, p.board, args.depth) for p in test]
         rng = random.Random(seed)
 
-        def rate(moves):
+        def rate(moves, test=test):
             return float(np.mean([has_habit(p.board, m) for p, m in zip(test, moves)]))
 
         rows.setdefault("player's own moves", []).append(rate([p.move for p in test]))

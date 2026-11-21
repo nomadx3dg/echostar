@@ -206,7 +206,7 @@ def merge_tally(a, b):
 
 
 def _z(cell):
-    n, observed, expected, variance = cell
+    _n, observed, expected, variance = cell
     return (observed - expected) / math.sqrt(variance) if variance > 0 else 0.0
 
 

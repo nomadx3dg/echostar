@@ -94,7 +94,7 @@ def test_learn_roundtrip_and_resume(tmp_path):
     write_random_games(pgn, 12)
     out = tmp_path / "style.npz"
     echo.learn(learn_args(pgn, out))
-    net, meta = echo.load_model(out)
+    _net, meta = echo.load_model(out)
     assert meta["games"] == 12 and meta["validation"] is not None
     assert 0 <= meta["validation"]["top1"] <= 1
 
@@ -391,7 +391,7 @@ def play_args(tmp_path, **kw):
 
 
 class DummyEngine:
-    options = {}
+    options: dict = {}
 
     def __init__(self):
         self.quit_called = False
