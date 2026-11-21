@@ -17,6 +17,8 @@ near-equal moves gets played. Nothing in the style model can make Echo play a mo
 | Game saving | `save_game()` | `pgn.rs` |
 | UCI engine mode | n/a | `uci.rs` |
 | Training | `learn()` | n/a (training stays in Python) |
+| Behavior dimensions | `personality.py` | `model.rs` (reads them from the profile) |
+| Optional Maia teacher | `maia_teacher.py` | n/a (training-time only; the `.echo` file is unchanged) |
 
 ## The style model
 - **Input:** 768 units (12 piece types x 64 squares), always from the mover's point of view (black positions are mirrored).
@@ -26,6 +28,12 @@ near-equal moves gets played. Nothing in the style model can make Echo play a mo
 - **Training:** softmax over the legal moves, cross-entropy on the move the player actually chose, plain SGD, the best epoch
   by held-out loss is kept.
 - **Opening book:** counts of the moves the player chose in the first 16 plies; added to the score as `1.5 * ln(1 + count)`.
+
+## Optional Maia teacher
+Off by default. With `learn --maia-mix W` the training target becomes `(1 - W) * the move played + W * Maia's
+distribution`; `play` never uses it unless a blend brain is built explicitly in code. It can only reorder moves the
+safety band and blunder gate already allow, so it cannot weaken the guarantees above. Measurements, and the finding that
+it did not help on synthetic players, are in [MAIA.md](MAIA.md).
 
 ## Choosing a move
 1. Stockfish analyses with MultiPV 8 (fixed depth, or a time budget) and returns the top moves with scores.
@@ -38,7 +46,7 @@ near-equal moves gets played. Nothing in the style model can make Echo play a mo
 
 ## Python and Rust must agree
 The Rust engine only runs the model, so both implementations must produce identical features and scores.
-`tools/make_golden.py` writes a small random model plus the expected values for ~940 moves; `rust/tests/parity.rs`
+`tools/make_golden.py` writes a small random model plus the expected values for ~970 moves; `rust/tests/parity.rs`
 checks them. Change a feature in one place and the parity test fails until the other matches and the vectors are regenerated
 (`make golden`).
 

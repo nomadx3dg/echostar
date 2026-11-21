@@ -149,7 +149,8 @@ UCI options: `StylePath`, `StockfishPath`, `Dial`, `Band`, `Depth`, `Threads`, `
 ## Project layout
 
 ```
-echo.py                 Python prototype and trainer (learn, profile, fetch, play, export)
+echo.py                 Python prototype and trainer (learn, profile, fetch, play, export, maia-compare)
+personality.py          behavior dimensions measured against a random legal move (see docs/PERSONALITY.md)
 rust/                   Rust port: model, features, Stockfish client, chooser, terminal play, UCI mode
 tests/                  Python tests (chooser tests use a fake engine, so Stockfish isn't required)
 tools/make_golden.py    regenerates the Rust/Python parity vectors
@@ -157,7 +158,9 @@ maia_teacher.py         OPTIONAL Maia teacher (training-time helper; never neede
 tools/synth_games.py    synthetic quirky players for tests and benchmarks (not real human behavior)
 tools/bench_maia.py     benchmark EchoStar with/without Maia on identical held-out positions
 tools/bench_habit.py    does a system reproduce a synthetic player's planted habit?
-docs/                   ARCHITECTURE.md, FORMAT.md (the .echo model file), MAIA.md (Maia study and licensing)
+tools/validate_dimensions.py  checks the behavior dimensions against synthetic players with planted preferences
+docs/                   ARCHITECTURE.md, FORMAT.md (the .echo model file), PERSONALITY.md, AUDIT.md, MAIA.md (Maia study and licensing)
+ruff.toml               Python lint settings (run by `make lint` and CI)
 ROADMAP.md              milestones, including the Lichess bot plan
 ```
 
@@ -168,7 +171,7 @@ pip install -r requirements-dev.txt
 make test                # Python and Rust
 ```
 Or run them separately: `python -m pytest` and `cargo test --manifest-path rust/Cargo.toml`.
-`make lint` runs clippy on the Rust code, the same check CI uses.
+`make lint` runs `ruff` on the Python and clippy on the Rust code, the same checks CI uses.
 
 ## Optional: compare with Maia
 
