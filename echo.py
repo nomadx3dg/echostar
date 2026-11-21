@@ -179,8 +179,9 @@ class StyleNet:
         else:
             d[t] -= 1.0
         dh = d @ self.W2T[midx]
-        np.add.at(self.W2T, midx, -lr * np.outer(d, h))
-        np.add.at(self.b2, midx, -lr * d)
+        # Legal moves map to distinct units, so plain fancy indexing equals np.add.at here (bit-identical, faster).
+        self.W2T[midx] -= lr * np.outer(d, h)
+        self.b2[midx] -= lr * d
         self.w -= lr * (F.T @ d)
         dpre = dh * (pre > 0)
         self.W1[act] -= lr * dpre

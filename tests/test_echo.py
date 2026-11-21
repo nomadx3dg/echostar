@@ -13,6 +13,43 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import echo  # noqa: E402
 
 
+# ---------------------------------------------------------------- training step
+def reference_step(net, sample, lr):
+    """The original update, written with np.add.at. The shipped step must stay bit-identical to it."""
+    act, midx, F, t = sample[:4]
+    pre = net.W1[act].sum(0) + net.b1
+    h = np.maximum(pre, 0)
+    p = echo.softmax(net.W2T[midx] @ h + net.b2[midx] + F @ net.w)
+    d = p.copy()
+    d[t] -= 1.0
+    dh = d @ net.W2T[midx]
+    np.add.at(net.W2T, midx, -lr * np.outer(d, h))
+    np.add.at(net.b2, midx, -lr * d)
+    net.w -= lr * (F.T @ d)
+    dpre = dh * (pre > 0)
+    net.W1[act] -= lr * dpre
+    net.b1 -= lr * dpre
+
+
+def test_step_is_bit_identical_to_the_np_add_at_reference():
+    board, a, b = chess.Board(), echo.StyleNet(hidden=8), echo.StyleNet(hidden=8)
+    for name in ("W1", "b1", "W2T", "b2", "w"):
+        setattr(b, name, getattr(a, name).copy())
+    rng = random.Random(3)
+    for _ in range(30):
+        moves = list(board.legal_moves)
+        midx = np.array([echo.move_index(board, m) for m in moves])
+        assert len(set(midx.tolist())) == len(midx)            # the property the fast path relies on
+        sample = (echo.encode(board), midx, np.array([echo.features(board, m) for m in moves]), rng.randrange(len(moves)))
+        a.step(sample, 0.05)
+        reference_step(b, sample, 0.05)
+        board.push(rng.choice(moves))
+        if board.is_game_over():
+            board = chess.Board()
+    for name in ("W1", "b1", "W2T", "b2", "w"):
+        assert np.array_equal(getattr(a, name), getattr(b, name)), name
+
+
 # ---------------------------------------------------------------- encoding / features
 def test_encode_is_perspective_symmetric():
     board = chess.Board()
