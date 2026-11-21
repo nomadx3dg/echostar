@@ -612,3 +612,98 @@ def test_coach_line_printed_when_gate_falls_back(capsys):
                     {"band": 100, "temp": 0.0}, verbose=True)
     assert bot.choose(chess.Board()).uci() == "e2e4"
     assert "falls back" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- the play loop, scripted end to end
+class ScriptedEngine(DummyEngine):
+    """Every position is equal; the first three legal moves are the candidates. Enough to drive a whole game."""
+    def analyse(self, board, limit, multipv=None):
+        score = chess.engine.PovScore(chess.engine.Cp(0), board.turn)
+        if multipv:
+            return [{"pv": [m], "score": score} for m in list(board.legal_moves)[:3]]
+        return {"pv": [next(iter(board.legal_moves))], "score": score}
+
+
+def run_play(tmp_path, monkeypatch, typed, **kw):
+    engine = ScriptedEngine()
+    monkeypatch.setattr(echo, "find_stockfish", lambda path: "stockfish")
+    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", classmethod(lambda cls, path: engine))
+    inputs = iter(typed)
+
+    def fake_input(prompt=""):
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError from None
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    echo.play(play_args(tmp_path, seed=1, **kw))
+    return engine
+
+
+def test_play_commands_help_hint_illegal_undo_and_a_real_move(tmp_path, monkeypatch, capsys):
+    engine = run_play(tmp_path, monkeypatch, ["help", "hint", "zzz", "e4", "undo", "quit"], show=True)
+    out = capsys.readouterr().out
+    assert "Enter a move like e4" in out
+    assert "Engine suggests" in out
+    assert "Illegal or unreadable move" in out
+    assert "Echo plays" in out                      # Echo answered 1.e4
+    assert "matched the engine's top move" in out   # the coach summary prints at the end with --show
+    assert engine.quit_called
+
+
+def test_play_resign_records_the_result_and_saves_the_game(tmp_path, monkeypatch, capsys):
+    run_play(tmp_path, monkeypatch, ["e4", "resign"], no_save=False)
+    out = capsys.readouterr().out
+    assert "You resigned." in out and "Result: 0-1" in out
+    saved = list(tmp_path.glob("echo_*.pgn"))
+    assert len(saved) == 1 and '[Result "0-1"]' in saved[0].read_text()
+
+
+def test_play_as_black_lets_echo_move_first(tmp_path, monkeypatch, capsys):
+    run_play(tmp_path, monkeypatch, ["quit"], color="black")
+    assert "Echo plays" in capsys.readouterr().out
+
+
+def test_play_survives_an_engine_that_stops_responding(tmp_path, monkeypatch, capsys):
+    class Dies(ScriptedEngine):
+        def analyse(self, board, limit, multipv=None):
+            raise chess.engine.EngineTerminatedError("gone")
+
+    engine = Dies()
+    monkeypatch.setattr(echo, "find_stockfish", lambda path: "stockfish")
+    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", classmethod(lambda cls, path: engine))
+    echo.play(play_args(tmp_path, color="black"))
+    assert "The engine stopped responding" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- command line
+@pytest.mark.parametrize("argv,target", [
+    (["learn", "g.pgn", "--player", "Me"], "learn"),
+    (["maia-compare", "g.pgn", "--player", "Me"], "maia_compare"),
+    (["fetch", "someone"], "fetch_cmd"),
+    (["profile", "style.npz"], "profile"),
+    (["play"], "play"),
+    (["export", "style.npz"], "export_cmd"),
+])
+def test_each_subcommand_dispatches_to_its_function(monkeypatch, argv, target):
+    seen = []
+    monkeypatch.setattr(echo, target, lambda args: seen.append(args))
+    monkeypatch.setattr(sys, "argv", ["echo.py", *argv])
+    echo.main()
+    assert len(seen) == 1
+
+
+def test_cli_defaults_leave_the_maia_teacher_off(monkeypatch):
+    seen = []
+    monkeypatch.setattr(echo, "learn", lambda args: seen.append(args))
+    monkeypatch.setattr(sys, "argv", ["echo.py", "learn", "g.pgn", "--player", "Me"])
+    echo.main()
+    assert seen[0].maia_mix == 0.0 and seen[0].maia_weights is None and seen[0].maia_cache is None
+
+
+def test_cli_requires_a_subcommand(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["echo.py"])
+    with pytest.raises(SystemExit) as exc:
+        echo.main()
+    assert exc.value.code == 2
