@@ -20,14 +20,14 @@ import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import bench_maia as bm  # noqa: E402
 import chess  # noqa: E402
 import chess.engine  # noqa: E402
 import numpy as np  # noqa: E402
+from synth_games import SIGNALS  # noqa: E402
 
-import bench_maia as bm  # noqa: E402
 import echo  # noqa: E402
 import maia_teacher as mt  # noqa: E402
-from synth_games import SIGNALS  # noqa: E402
 
 
 def main():

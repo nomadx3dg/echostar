@@ -117,7 +117,9 @@ def run_planted(n_betas, replicates, n_games, plies, seed, beta_max=2.0):
 
 
 def report(null, planted, out=sys.stdout):
-    p = lambda *a: print(*a, file=out)
+    def p(*a):
+        print(*a, file=out)
+
     names = personality.NAMES
 
     p("## 1. Null calibration (players who choose uniformly at random)\n")

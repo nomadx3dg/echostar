@@ -94,7 +94,7 @@ def test_classify_speed(tc, expected):
 def write_random_games(path, n, seed=0, plies=40):
     rng = random.Random(seed)
     with open(path, "w") as fh:
-        for i in range(n):
+        for _ in range(n):
             board, game = chess.Board(), chess.pgn.Game()
             game.headers.update({"White": "Me", "Black": "Opp", "TimeControl": "600+0", "BlackElo": "1500"})
             node = game
@@ -384,7 +384,8 @@ def test_fetch_cmd_writes_file(mock_server, tmp_path, monkeypatch):
     routes["/api/games/user/alice?max=3&tags=true&clocks=false&evals=false&opening=false"] = GAME
     monkeypatch.setattr(echo, "LICHESS_URL", base)
     monkeypatch.setattr(echo, "fetch_lichess",
-                        lambda *a, **k: echo.http_get(f"{base}/api/games/user/alice?max=3&tags=true&clocks=false&evals=false&opening=false"))
+                        lambda *a, **k: echo.http_get(
+                            f"{base}/api/games/user/alice?max=3&tags=true&clocks=false&evals=false&opening=false"))
     out = tmp_path / "g.pgn"
     echo.fetch_cmd(Namespace(user="alice", site="lichess", max=3, speed=None, rated=False, out=str(out)))
     assert out.read_text().count("[Event ") == 1
@@ -450,7 +451,7 @@ def test_play_stops_cleanly_on_eof_and_reports_nothing_to_undo(tmp_path, monkeyp
         try:
             return next(inputs)
         except StopIteration:
-            raise EOFError
+            raise EOFError from None
 
     monkeypatch.setattr("builtins.input", fake_input)
     echo.play(play_args(tmp_path))                  # must return normally, not raise EOFError
@@ -547,8 +548,10 @@ def v1_logits(net, board, moves):
 def test_v1_profile_migrates_without_changing_any_score(tmp_path, capsys):
     rng = np.random.default_rng(5)
     net = echo.StyleNet(rng=rng, hidden=8)
-    net.W2T[:4096] = rng.normal(0, 0.5, (4096, 8)); net.b2[:4096] = rng.normal(0, 0.3, 4096)
-    net.W1 = rng.normal(0, 0.5, net.W1.shape); net.w = rng.normal(0, 0.8, net.w.shape)
+    net.W2T[:4096] = rng.normal(0, 0.5, (4096, 8))
+    net.b2[:4096] = rng.normal(0, 0.3, 4096)
+    net.W1 = rng.normal(0, 0.5, net.W1.shape)
+    net.w = rng.normal(0, 0.8, net.w.shape)
     path = v1_file(tmp_path, net)
 
     migrated, meta = echo.load_model(path)

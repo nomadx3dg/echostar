@@ -1,0 +1,13 @@
+# Lint for the Python side. Deliberately small: real bugs (F, B), pycodestyle errors (E, W), import order (I).
+line-length = 140
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "B", "I"]
+# B905: every zip here pairs sequences that are the same length by construction.
+ignore = ["B905"]
+
+[lint.per-file-ignores]
+# These scripts and tests extend sys.path before importing the project modules.
+"tools/*.py" = ["E402"]
+"tests/*.py" = ["E402"]

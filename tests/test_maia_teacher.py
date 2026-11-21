@@ -17,9 +17,10 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from test_echo import FakeEngine, StubBrain, learn_args, write_random_games  # noqa: E402
+
 import echo  # noqa: E402
 import maia_teacher as mt  # noqa: E402
-from test_echo import FakeEngine, StubBrain, learn_args, write_random_games  # noqa: E402
 
 
 class FakeTeacher:

@@ -937,7 +937,8 @@ def play(args):
                     continue
                 if text == "undo":
                     if len(board.move_stack) >= 2:
-                        board.pop(); board.pop()
+                        board.pop()
+                        board.pop()
                         last = board.peek() if board.move_stack else None
                     else:
                         print("Nothing to undo yet.\n")
@@ -1063,23 +1064,23 @@ def main():
     p = argparse.ArgumentParser(description="Echo: a chess engine that plays your style, correctly.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    l = sub.add_parser("learn", help="train a style model from your PGN games")
-    l.add_argument("pgn")
-    l.add_argument("--player", required=True, help="your name exactly as in the PGN headers")
-    l.add_argument("--out", default="style.npz")
-    l.add_argument("--epochs", type=int, default=12)
-    l.add_argument("--lr", type=float, default=0.02)
-    l.add_argument("--speed", help="only use these speeds, comma separated: bullet,blitz,rapid,classical")
-    l.add_argument("--min-opp-rating", type=int, help="only use games against opponents rated at least this")
-    l.add_argument("--resume", help="continue training an existing style.npz with new games")
-    l.add_argument("--maia-mix", type=float, default=0.0, metavar="W",
+    ln = sub.add_parser("learn", help="train a style model from your PGN games")
+    ln.add_argument("pgn")
+    ln.add_argument("--player", required=True, help="your name exactly as in the PGN headers")
+    ln.add_argument("--out", default="style.npz")
+    ln.add_argument("--epochs", type=int, default=12)
+    ln.add_argument("--lr", type=float, default=0.02)
+    ln.add_argument("--speed", help="only use these speeds, comma separated: bullet,blitz,rapid,classical")
+    ln.add_argument("--min-opp-rating", type=int, help="only use games against opponents rated at least this")
+    ln.add_argument("--resume", help="continue training an existing style.npz with new games")
+    ln.add_argument("--maia-mix", type=float, default=0.0, metavar="W",
                    help="optional: blend a Maia teacher into the training target, 0 (default, off) to <1; "
                         "needs --maia-weights with lc0, or --maia-cache")
-    l.add_argument("--maia-weights", metavar="FILE", help="Maia-1 weights (maia-1500.pb.gz); run through lc0")
-    l.add_argument("--lc0", metavar="PATH", help="path to the lc0 binary (default: lc0 on PATH)")
-    l.add_argument("--maia-cache", metavar="FILE",
+    ln.add_argument("--maia-weights", metavar="FILE", help="Maia-1 weights (maia-1500.pb.gz); run through lc0")
+    ln.add_argument("--lc0", metavar="PATH", help="path to the lc0 binary (default: lc0 on PATH)")
+    ln.add_argument("--maia-cache", metavar="FILE",
                    help="JSON-lines cache of Maia probabilities; filled when lc0 is given, replayed when it is not")
-    l.set_defaults(fn=learn)
+    ln.set_defaults(fn=learn)
 
     mc = sub.add_parser("maia-compare", help="compare your moves with what a Maia model predicts (needs lc0 + weights or a cache)")
     mc.add_argument("pgn")

@@ -9,10 +9,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
-import echo  # noqa: E402
-import personality as P  # noqa: E402
 import validate_dimensions as V  # noqa: E402
 from test_echo import learn_args, v1_file, write_random_games  # noqa: E402
+
+import echo  # noqa: E402
+import personality as P  # noqa: E402
 
 
 def sig(name, fen, uci):
