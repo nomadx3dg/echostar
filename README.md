@@ -207,5 +207,6 @@ that did **not** help, so it is off by default. Read [docs/MAIA.md](docs/MAIA.md
 - [ROADMAP.md](ROADMAP.md): milestones, including the Lichess bot
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design notes
 - [docs/FORMAT.md](docs/FORMAT.md): the `.echo` model format
+- [docs/FISCHER.md](docs/FISCHER.md): first experiment on real games (Bobby Fischer)
 
 License: [GNU GPL v3](LICENSE) (SPDX: GPL-3.0-only). Echo depends on GPL libraries (python-chess, shakmaty) and drives Stockfish, which is GPL too. If you ship Stockfish's binary together with Echo, comply with its license as well. Maia and lc0 are optional and are never bundled; see [docs/MAIA.md](docs/MAIA.md#5-licensing).

@@ -114,6 +114,32 @@ def learn_args(pgn, out, **kw):
     return Namespace(**base)
 
 
+def test_learn_book_depth_pretrain_and_after_book_accuracy(tmp_path, capsys):
+    pgn = tmp_path / "g.pgn"
+    write_random_games(pgn, 12, plies=60)
+    shallow, deep = tmp_path / "s.npz", tmp_path / "d.npz"
+    echo.learn(learn_args(pgn, shallow, epochs=2, book_plies=4))
+    echo.learn(learn_args(pgn, deep, epochs=2, book_plies=40, pretrain_opponents=1, patience=1))
+    out = capsys.readouterr().out
+    assert "Warm-up: 1 epoch(s)" in out
+    _, m_shallow = echo.load_model(shallow)
+    _, m_deep = echo.load_model(deep)
+    assert len(m_deep["book"]) > len(m_shallow["book"])                 # deeper book stores more positions
+    late = m_deep["validation_after_book"]
+    assert late is not None and 0 <= late["top1"] <= late["top3"] <= 1
+
+
+def test_learn_defaults_unchanged_without_new_options(tmp_path):
+    """Namespaces from before the new options existed still work, and leave the model identical in shape."""
+    pgn = tmp_path / "g.pgn"
+    write_random_games(pgn, 12)
+    out = tmp_path / "style.npz"
+    echo.learn(learn_args(pgn, out))                                    # no book_plies / pretrain / patience keys
+    net, meta = echo.load_model(out)
+    assert net.W1.shape == (768, echo.HIDDEN) and net.W2T.shape[0] == echo.N_MOVES
+    assert meta["profile_version"] == echo.PROFILE_VERSION
+
+
 def test_read_games_filters(tmp_path):
     pgn = tmp_path / "g.pgn"
     write_random_games(pgn, 3)

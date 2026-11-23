@@ -340,15 +340,23 @@ def learn(args):
         print(f"Maia teacher {getattr(teacher, 'name', '?')}: soft-target weight {mix} "
               f"(your own moves still carry weight {1 - mix:g}).")
 
-    per_game, book = [], {}
+    book_plies = getattr(args, "book_plies", None) or BOOK_PLIES
+    pretrain = getattr(args, "pretrain_opponents", 0) or 0
+    per_game, per_late, per_opp, book = [], [], [], {}
     played_sum = np.zeros(len(FEATURES))
     base_sum = np.zeros(len(FEATURES))
     n_pos = 0
     tally = personality.new_tally()
     try:
         for game_no, (game, me) in enumerate(games):
-            board, samples = game.board(), []
+            board, samples, late, opp = game.board(), [], [], []
             for ply, move in enumerate(game.mainline_moves()):
+                if board.turn != me and pretrain:
+                    # The opponents' moves are only a warm-up for the net (see --pretrain-opponents); never counted.
+                    omoves = list(board.legal_moves)
+                    if move in omoves and len(omoves) > 1:
+                        opp.append((encode(board), np.array([move_index(board, m) for m in omoves]),
+                                    np.array([features(board, m) for m in omoves]), omoves.index(move)))
                 if board.turn == me:
                     moves = list(board.legal_moves)
                     if move in moves:
@@ -359,13 +367,16 @@ def learn(args):
                         if teacher is not None:
                             sample += (teacher.probs(board, moves),)
                         samples.append(sample)
+                        late.append(ply >= BOOK_PLIES)
                         played_sum += F[t]
                         base_sum += F.mean(0)
                         n_pos += 1
-                    if ply < BOOK_PLIES:
+                    if ply < book_plies:
                         book.setdefault(book_key(board), Counter())[move.uci()] += 1
                 board.push(move)
             per_game.append(samples)
+            per_late.append(late)
+            per_opp.append(opp)
     except Exception as exc:                       # a teacher failure is a clear message, not a traceback
         if teacher is None or exc.__class__.__name__ != "TeacherError":
             raise
@@ -381,6 +392,10 @@ def learn(args):
     n_val = max(1, len(per_game) // 10) if len(per_game) >= 10 else 0
     train = [s for g in per_game[:len(per_game) - n_val] for s in g]
     val = [s for g in per_game[len(per_game) - n_val:] for s in g] if n_val else []
+    # The same held-out positions without the opening moves: players repeat their openings, so the opening inflates
+    # the headline accuracy. This is the number to trust for "does it know how I play once the book runs out".
+    val_late = [s for g, fl in zip(per_game[len(per_game) - n_val:], per_late[len(per_game) - n_val:])
+                for s, is_late in zip(g, fl) if is_late] if n_val else []
     print(f"{n_pos} positions ({len(train)} train / {len(val)} held-out).")
     if len(train) < 2000 and not args.resume:
         print("Note: under ~2000 positions (roughly 60+ games) the net will mostly memorize. More games help.")
@@ -395,6 +410,16 @@ def learn(args):
     else:
         net, lr0 = StyleNet(), args.lr
 
+    if pretrain and not args.resume:
+        warm = [s for g in per_opp[:len(per_game) - n_val] for s in g]
+        print(f"Warm-up: {pretrain} epoch(s) on {len(warm)} opponent moves from the training games.")
+        for epoch in range(pretrain):
+            random.shuffle(warm)
+            lr = lr0 / (1 + 0.15 * epoch)
+            for s in warm:
+                net.step(s, lr)
+    patience = getattr(args, "patience", 0) or 0
+    stale = 0
     ev0 = net.evaluate(val) if (old and val) else None
     best = ev0["loss"] if ev0 else float("inf")
     best_params = net.params()
@@ -409,7 +434,12 @@ def learn(args):
             msg += f"  | held-out loss {ev['loss']:.3f}  top-1 {ev['top1']:.1%}"
         print(msg)
         if score < best:
-            best, best_params = score, net.params()
+            best, best_params, stale = score, net.params(), 0
+        else:
+            stale += 1
+            if patience and stale >= patience:
+                print(f"  no improvement for {patience} epochs; stopping early.")
+                break
     net.load_params(best_params)
 
     # Merge with the old model's statistics when resuming
@@ -437,6 +467,7 @@ def learn(args):
         "baseline_rate": dict(zip(FEATURES, (base_sum / total).tolist())),
         "book": {k: dict(v) for k, v in book.items()},
         "validation": net.evaluate(val) or (old or {}).get("validation"),
+        "validation_after_book": net.evaluate(val_late) or (old or {}).get("validation_after_book"),
         "dimensions": personality.to_meta(tally, dim_games),
     }
     if teacher is not None:
@@ -567,6 +598,10 @@ def print_profile(meta):
         print("\n  Accuracy on games it never trained on:")
         print(f"    predicts your exact move {v['top1']:.1%} of the time (random guessing: {v['random_top1']:.1%})")
         print(f"    your move is in its top 3 {v['top3']:.1%} of the time")
+        late = meta.get("validation_after_book")
+        if late:
+            print(f"    after the opening (move {BOOK_PLIES // 2 + 1} on): exact move {late['top1']:.1%}, "
+                  f"top 3 {late['top3']:.1%} (random guessing: {late['random_top1']:.1%})")
     else:
         print("\n  Accuracy: not measured (need 10+ games to hold some out).")
 
@@ -1070,6 +1105,14 @@ def main():
     ln.add_argument("--out", default="style.npz")
     ln.add_argument("--epochs", type=int, default=12)
     ln.add_argument("--lr", type=float, default=0.02)
+    ln.add_argument("--book-plies", type=int, default=BOOK_PLIES, metavar="N",
+                   help=f"opening book depth in half-moves (default {BOOK_PLIES}); 32 helps players who repeat long "
+                        "theory lines. Only exact repeated positions are affected")
+    ln.add_argument("--pretrain-opponents", type=int, default=0, metavar="EPOCHS",
+                   help="warm up the net on your opponents' moves first (default 0 = off). Only sensible when your "
+                        "opponents played well, e.g. a master's games against other masters")
+    ln.add_argument("--patience", type=int, default=3,
+                   help="stop after this many epochs without a better held-out score (0 = always run all epochs)")
     ln.add_argument("--speed", help="only use these speeds, comma separated: bullet,blitz,rapid,classical")
     ln.add_argument("--min-opp-rating", type=int, help="only use games against opponents rated at least this")
     ln.add_argument("--resume", help="continue training an existing style.npz with new games")
