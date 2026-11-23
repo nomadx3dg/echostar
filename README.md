@@ -123,6 +123,15 @@ python echo.py learn games/*.pgn --player YourName --resume style.npz --out styl
 ```
 (concatenate several files first if your shell can't expand the glob into one input.)
 
+## Web UI and commentary
+
+```bash
+python echo.py ui --style style.npz        # board, opponent card, chat-style commentary, scoresheet
+python echo.py play --style style.npz --chat   # the same commentary in the terminal
+```
+
+See [docs/UI.md](docs/UI.md).
+
 ## Rust engine and UCI mode
 
 `rust/` is a faster, dependency-light port of the engine. Training stays in Python; Rust only runs the trained model, and is
@@ -150,6 +159,8 @@ UCI options: `StylePath`, `StockfishPath`, `Dial`, `Band`, `Depth`, `Threads`, `
 
 ```
 echo.py                 Python prototype and trainer (learn, profile, fetch, play, export, maia-compare)
+commentary.py          chat-style bot commentary (used by `ui` and `play --chat`)
+ui_server.py            local web UI server; the page is ui/index.html (see docs/UI.md)
 personality.py          behavior dimensions measured against a random legal move (see docs/PERSONALITY.md)
 rust/                   Rust port: model, features, Stockfish client, chooser, terminal play, UCI mode
 tests/                  Python tests (chooser tests use a fake engine, so Stockfish isn't required)

@@ -943,6 +943,22 @@ def play(args):
     echo = Echo(engine, brain, dial, args.depth, verbose=args.show)
     human = chess.WHITE if args.color == "white" else chess.BLACK
     board, last, result = chess.Board(), None, None
+    chat = getattr(args, "chat", False)
+    if chat:
+        import commentary
+        import ui_server
+        talk, e_prev = commentary.Commentator("echo"), 0
+        print(f'Echo: "{talk.start(human == chess.BLACK)}"')
+
+    def remark(before, mv, by_bot):
+        """Chat mode: one shallow engine check per move, then Echo's comment if it has one."""
+        nonlocal e_prev
+        e_now = ui_server.eval_white(engine, board)
+        line = talk.on_move(before, mv, by_bot, e_prev, e_now)
+        e_prev = e_now
+        if line:
+            print(f'Echo: "{line}"\n')
+
     print(f"Echo ({args.dial}, band {dial['band']} cp) vs you. Moves in SAN (e4, Nf3) or UCI (e2e4).")
     print("Commands: undo, hint, resign, help, quit.\n")
 
@@ -982,8 +998,11 @@ def play(args):
                 if move is None:
                     print("Illegal or unreadable move, try again. (Examples: e4, Nf3, O-O, e8=Q, e2e4)\n")
                     continue
+                before = board.copy(stack=True)
                 board.push(move)
                 last = move
+                if chat:
+                    remark(before, move, False)
             else:
                 try:
                     move = echo.choose(board, args.movetime)
@@ -991,10 +1010,17 @@ def play(args):
                     print(f"The engine stopped responding ({exc}). Saving the game so far.")
                     break
                 print(f"Echo plays {board.san(move)}\n")
+                before = board.copy(stack=True)
                 board.push(move)
                 last = move
+                if chat:
+                    remark(before, move, True)
         print(render(board, human, last, color=not args.plain), "\nResult:",
               result or board.result(claim_draw=True))
+        if chat and board.move_stack and not board.is_checkmate():
+            final = result or board.result(claim_draw=True)
+            if final != "*":
+                print(f'Echo: "{talk.on_result(final, human == chess.BLACK, resigned=result is not None)}"')
     finally:
         if args.show and echo.summary():
             print(echo.summary())
@@ -1010,6 +1036,44 @@ def play(args):
 # ----------------------------------------------------------------------------
 # Download your games (Lichess / Chess.com public APIs, no account token needed)
 # ----------------------------------------------------------------------------
+def ui_cmd(args):
+    """Local web UI: pick an opponent, play on a board, read the bot's commentary."""
+    import ui_server
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+    brains = {"echo": StyleBrain(args.style)}
+    if not args.style:
+        print("No style file given: the Echo opponent will play as a plain engine.")
+    fischer_ok = os.path.exists(args.fischer_style)
+    brains["fischer"] = StyleBrain(args.fischer_style) if fischer_ok else StyleBrain(None)
+    bots = {
+        "echo": ui_server.Bot("echo", "Echo", "Plays your style, stays correct." if args.style else "A plain engine.",
+                              "echo", brains["echo"], args.dial),
+        "fischer": ui_server.Bot(
+            "fischer", "Fischer", "A bot trained on Bobby Fischer's games. Not him; a style model.", "fischer",
+            brains["fischer"], "sharp", available=fischer_ok,
+            note=f"Train it first: python echo.py learn fischer.pgn --player \"Fischer, Robert James\" "
+                 f"--out {args.fischer_style}"),
+    }
+    engine = chess.engine.SimpleEngine.popen_uci(find_stockfish(args.stockfish))
+    opts = {"Threads": args.threads, "Hash": args.hash}
+    engine.configure({k: v for k, v in opts.items() if v and k in engine.options})
+
+    def make_echo(bot, dial):
+        return Echo(engine, bot.brain, dial, args.depth)
+
+    app = ui_server.GameApp(engine, make_echo, bots, args.save_dir, save=not args.no_save, movetime=args.movetime,
+                            seed=args.seed, save_fn=save_game)
+    try:
+        ui_server.serve(app, args.port, open_browser=not args.no_browser)
+    finally:
+        try:
+            engine.quit()
+        except chess.engine.EngineError:
+            pass
+
+
 LICHESS_URL = "https://lichess.org"
 CHESSCOM_URL = "https://api.chess.com"
 USER_AGENT = "echostar (https://github.com/nomadx3dg/echostar)"
@@ -1166,7 +1230,26 @@ def main():
     g.add_argument("--hash", type=int, help="Stockfish hash size in MB")
     g.add_argument("--save-dir", default="games", help="where finished games are saved as PGN")
     g.add_argument("--no-save", action="store_true", help="don't save the game")
+    g.add_argument("--chat", action="store_true",
+                   help="Echo comments on the game like a chess-site bot (one extra shallow engine check per move)")
     g.set_defaults(fn=play)
+
+    ui = sub.add_parser("ui", help="play in a local web page, with commentary (see docs/UI.md)")
+    ui.add_argument("--style", help="your style.npz (omit to play a plain engine)")
+    ui.add_argument("--fischer-style", default=os.path.join("profiles", "fischer.npz"),
+                    help="model for the hidden extra opponent (default profiles/fischer.npz)")
+    ui.add_argument("--dial", choices=sorted(DIALS), default="balanced")
+    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--no-browser", action="store_true", help="don't open the page automatically")
+    ui.add_argument("--depth", type=int, default=12)
+    ui.add_argument("--movetime", type=float, help="seconds per move (overrides --depth)")
+    ui.add_argument("--seed", type=int, help="random seed")
+    ui.add_argument("--stockfish", help="path to the Stockfish binary")
+    ui.add_argument("--threads", type=int, help="Stockfish threads")
+    ui.add_argument("--hash", type=int, help="Stockfish hash size in MB")
+    ui.add_argument("--save-dir", default="games", help="where finished games are saved as PGN")
+    ui.add_argument("--no-save", action="store_true", help="don't save games")
+    ui.set_defaults(fn=ui_cmd)
 
     ex = sub.add_parser("export", help="convert a style.npz to the .echo format used by the Rust engine")
     ex.add_argument("style")
