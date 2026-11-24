@@ -2,8 +2,8 @@
 
     python echo.py ui --style style.npz
 
-Standard library only. The server binds to 127.0.0.1, serves one page (ui/index.html) and a small JSON API, and keeps one
-game in memory. It does not need to be exposed to a network and refuses requests that come from other web pages.
+Standard library only. The server binds to 127.0.0.1, serves the page (ui/index.html, styles.css, app.js) and a small
+JSON API, and keeps one game in memory. It does not need to be exposed to a network and refuses requests that come from other web pages.
 """
 import hashlib
 import hmac
@@ -18,6 +18,7 @@ import chess
 import chess.engine
 
 import commentary
+import review
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_BODY = 4096
@@ -49,22 +50,36 @@ class Bot:
                 "note": self.note, "persona": self.persona}
 
 
+def analyse_position(engine, board, depth=EVAL_DEPTH):
+    """One shallow search: {"cp": White's-view centipawns, "best": best move (UCI), "second": score of the runner-up}.
+
+    The runner-up score is what lets practice mode tell an only move from one of several good ones.
+    """
+    if board.is_checkmate():
+        return {"cp": -commentary.MATE if board.turn == chess.WHITE else commentary.MATE, "best": None, "second": None}
+    if board.is_game_over(claim_draw=True):
+        return {"cp": 0, "best": None, "second": None}
+    infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=2)
+    infos = infos if isinstance(infos, list) else [infos]
+    score = lambda info: info["score"].white().score(mate_score=commentary.MATE)  # noqa: E731
+    top = infos[0]
+    return {"cp": score(top), "best": top["pv"][0].uci() if top.get("pv") else None,
+            "second": score(infos[1]) if len(infos) > 1 else None}
+
+
 def eval_white(engine, board, depth=EVAL_DEPTH):
     """Engine score in centipawns from White's point of view."""
-    if board.is_checkmate():
-        return -commentary.MATE if board.turn == chess.WHITE else commentary.MATE
-    if board.is_game_over(claim_draw=True):
-        return 0
-    info = engine.analyse(board, chess.engine.Limit(depth=depth))
-    return info["score"].white().score(mate_score=commentary.MATE)
+    return analyse_position(engine, board, depth)["cp"]
 
 
 class GameApp:
     """The state behind the UI. All public methods return the JSON-ready state and are safe to call from threads."""
 
     def __init__(self, engine, echo_factory, bots, save_dir="games", save=True, movetime=None, seed=None,
-                 save_fn=None):
+                 save_fn=None, openings=None):
         self.engine, self.echo_factory, self.bots = engine, echo_factory, bots
+        self.openings = openings          # openings.Openings or None: names and "Book" signs
+        self.practice = False             # practice mode: move signs, hints and the take-back prompt
         self.save_dir, self.save, self.movetime = save_dir, save, movetime
         self.save_fn = save_fn            # echo.save_game, passed in so this module never imports echo.py
         self.unlocked = False
@@ -99,7 +114,8 @@ class GameApp:
             self.board = chess.Board()
             self.talk = commentary.Commentator(bot.persona, random.Random(self.rng.random()))
             self.chat, self.result, self.resigned, self.saved_path = [], None, False, None
-            self.evals = [0]                       # evals[i] = score (White's view) before ply i
+            self.analysis = [analyse_position(self.engine, self.board)]   # analysis[i]: the position before ply i
+            self.reviews, self.trail = [], []     # per ply: the move's sign, and the latest opening name reached
             self.chat.append(self._line(0, self.talk.start(self.human == chess.BLACK)))
             return self.state()                    # if the bot moves first, state()["pending"] is true: call reply()
 
@@ -132,10 +148,17 @@ class GameApp:
                 raise ValueError("nothing to undo yet")
             for _ in range(take):
                 self.board.pop()
-                self.evals.pop()
+                self.analysis.pop()
+                self.reviews.pop()
+                self.trail.pop()
             keep = len(self.board.move_stack)
             self.chat = [c for c in self.chat if c["ply"] <= keep]
             self.result, self.resigned, self.saved_path = None, False, None
+            return self.state()
+
+    def set_practice(self, on):
+        with self.lock:
+            self.practice = bool(on)
             return self.state()
 
     def resign(self):
@@ -153,11 +176,15 @@ class GameApp:
 
     def _play(self, mv, mover_is_bot):
         before = self.board.copy(stack=True)
-        e_before = self.evals[-1]
+        a_before = self.analysis[-1]
         self.board.push(mv)
-        e_after = eval_white(self.engine, self.board)
-        self.evals.append(e_after)
-        text = self.talk.on_move(before, mv, mover_is_bot, e_before, e_after)
+        a_after = analyse_position(self.engine, self.board)
+        self.analysis.append(a_after)
+        book = bool(self.openings and self.openings.is_book(self.board))
+        self.reviews.append(review.classify(before, mv, a_before, a_after, book))
+        named = self.openings.lookup(self.board) if self.openings else None
+        self.trail.append(named or (self.trail[-1] if self.trail else None))
+        text = self.talk.on_move(before, mv, mover_is_bot, a_before["cp"], a_after["cp"])
         if text:
             self.chat.append(self._line(len(self.board.move_stack), text, "bot"))
         self._finished()
@@ -194,9 +221,11 @@ class GameApp:
         b = self.board
         stack = b.move_stack
         replay, sans = chess.Board(), []
+        fens = [replay.board_fen()]              # piece placement after 0, 1, 2 ... plies, for stepping through the game
         for mv in stack:
             sans.append(replay.san(mv))
             replay.push(mv)
+            fens.append(replay.board_fen())
         last = stack[-1].uci() if stack else None
         check_sq = chess.square_name(b.king(b.turn)) if b.is_check() else None
         values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
@@ -207,7 +236,12 @@ class GameApp:
                 missing = start[pt] - len(b.pieces(pt, color))
                 captured[key] += [chess.piece_symbol(pt)] * max(0, missing)
         mat = sum(values[pt] * (len(b.pieces(pt, chess.WHITE)) - len(b.pieces(pt, chess.BLACK))) for pt in values)
+        best = self.analysis[-1]["best"] if self.practice and not self.result and b.turn == self.human else None
+        hint = {"uci": best, "san": b.san(chess.Move.from_uci(best))} if best else None
+        eco, name = self.trail[-1] if self.trail and self.trail[-1] else (None, None)
         return {
+            "practice": self.practice, "hint": hint, "reviews": self.reviews, "fens": fens,
+            "ucis": [m.uci() for m in stack], "opening": {"eco": eco, "name": name} if name else None,
             "fen": b.fen(), "turn": "w" if b.turn else "b", "human": "w" if self.human else "b",
             "legal": [m.uci() for m in b.legal_moves] if not self.result and b.turn == self.human else [],
             "last": last, "check": check_sq, "san": sans, "captured": captured, "material": mat,
@@ -220,9 +254,23 @@ class GameApp:
 # ------------------------------------------------------------------------------------------------------------------
 # HTTP
 # ------------------------------------------------------------------------------------------------------------------
+# The only files the server will send: a fixed allow-list, so no request path can reach anything else on disk.
+ASSETS = {
+    "/": ("index.html", "text/html"),
+    "/index.html": ("index.html", "text/html"),
+    "/styles.css": ("styles.css", "text/css"),
+    "/app.js": ("app.js", "text/javascript"),
+}
+# Everything is served from this origin: no inline script or style, no outside requests, no framing.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+       "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
 def make_handler(app):
-    with open(os.path.join(HERE, "ui", "index.html"), "rb") as fh:
-        page = fh.read()
+    files = {}
+    for url, (name, ctype) in ASSETS.items():
+        with open(os.path.join(HERE, "ui", name), "rb") as fh:
+            files[url] = (fh.read(), ctype)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "echostar-ui"
@@ -237,13 +285,15 @@ def make_handler(app):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", CSP)
             self.end_headers()
             self.wfile.write(data)
 
         def do_GET(self):
             path = urlparse(self.path).path
-            if path in ("/", "/index.html"):
-                self._send(200, page, "text/html")
+            if path in files:
+                body, ctype = files[path]
+                self._send(200, body, ctype)
             elif path == "/api/state":
                 with app.lock:
                     self._send(200, app.state())
@@ -279,6 +329,8 @@ def make_handler(app):
                     out = app.move(body.get("uci", ""))
                 elif path == "/api/reply":
                     out = app.reply()
+                elif path == "/api/practice":
+                    out = app.set_practice(body.get("on") is True)
                 elif path == "/api/undo":
                     out = app.undo()
                 elif path == "/api/resign":

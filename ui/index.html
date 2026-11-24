@@ -4,146 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Echo: play a bot that talks back</title>
+<meta name="description" content="Play a chess bot that learns your style and comments on the game.">
 <meta name="color-scheme" content="dark">
-<style>
-:root {
-  --ink: #101820;
-  --slate: #1b2733;
-  --slate-2: #243341;
-  --line: #31434f;
-  --text: #e8eef1;
-  --muted: #9bb0bb;
-  --paper: #e8ecee;
-  --paper-ink: #1d2933;
-  --paper-rule: #c9d2d7;
-  --sq-light: #d8ccb2;
-  --sq-dark: #3f6670;
-  --amber: #e0a43a;
-  --rose: #b5483f;
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
-body.theme-hall { --sq-light: #e3d9b5; --sq-dark: #5d7c52; --amber: #f0b84a; }
-
-* { box-sizing: border-box; }
-html, body { margin: 0; background: var(--ink); color: var(--text); font-family: var(--sans); }
-body { min-height: 100vh; background: radial-gradient(1200px 600px at 20% -10%, #1a2a38 0%, var(--ink) 60%); }
-button { font: inherit; color: inherit; }
-:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
-
-.table { display: grid; grid-template-columns: minmax(0, 660px) minmax(300px, 400px); gap: 28px;
-         justify-content: center; padding: 28px 20px 40px; max-width: 1180px; margin: 0 auto; }
-
-/* ---------- board ---------- */
-.board-col { display: grid; gap: 10px; align-content: start; }
-.board { container-type: inline-size; display: grid; grid-template: repeat(8, minmax(0, 1fr)) / repeat(8, minmax(0, 1fr)); aspect-ratio: 1;
-         border-radius: 6px; overflow: hidden; box-shadow: 0 0 0 1px #0007, 0 18px 40px #0009; }
-.sq { position: relative; border: 0; padding: 0; display: grid; place-items: center; cursor: pointer; min-width: 0; min-height: 0; overflow: hidden;
-      background: var(--sq-light); }
-.sq.dark { background: var(--sq-dark); }
-.sq.last::before { content: ""; position: absolute; inset: 0; background: var(--amber); opacity: .42; }
-.sq.sel::before { content: ""; position: absolute; inset: 0; background: var(--amber); opacity: .75; }
-.sq.check::before { content: ""; position: absolute; inset: 0;
-                    background: radial-gradient(circle, var(--rose) 0 35%, transparent 72%); opacity: .95; }
-.sq .coord { position: absolute; font-size: 1.9cqw; font-weight: 700; opacity: .7; pointer-events: none; }
-.sq .coord.file { right: 5%; bottom: 3%; }
-.sq .coord.rank { left: 5%; top: 3%; }
-.sq.dark .coord { color: var(--sq-light); }
-.sq:not(.dark) .coord { color: var(--sq-dark); }
-.piece { position: relative; font-size: 9.7cqw; line-height: 1; z-index: 1; user-select: none;
-         font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", system-ui, sans-serif; }
-.piece.w { color: #fbf8ef; -webkit-text-stroke: 1.3px #1f262c; text-shadow: 0 .5cqw 0 #0003; }
-.piece.b { color: #1c242b; -webkit-text-stroke: 1px #0b0f13; text-shadow: 0 .5cqw 0 #fff2; }
-.sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
-                    background: #101820; opacity: .32; z-index: 2; pointer-events: none; }
-.sq.target.has-piece::after { width: 92%; height: 92%; background: none; opacity: .5;
-                              border: .9cqw solid #101820; }
-.sq:hover.target { filter: brightness(1.08); }
-.board.locked .sq { cursor: default; }
-
-.captured { min-height: 28px; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .85rem; }
-.captured .row { font-size: 1.15rem; letter-spacing: -.12em; line-height: 1; }
-.captured .row .w { color: #fbf8ef; -webkit-text-stroke: .6px #1f262c; }
-.captured .row .b { color: #1c242b; -webkit-text-stroke: .6px #7f93a0; }
-
-.controls { display: flex; flex-wrap: wrap; gap: 8px; }
-.btn { background: var(--slate); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
-.btn:hover { background: var(--slate-2); }
-.btn.primary { background: var(--amber); color: #20180a; border-color: transparent; font-weight: 650; }
-.btn.primary:hover { filter: brightness(1.06); background: var(--amber); }
-.btn:disabled { opacity: .45; cursor: default; }
-
-/* ---------- side ---------- */
-.side { display: grid; gap: 16px; align-content: start; min-width: 0; }
-.opponent { background: var(--slate); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 14px; }
-.who { display: grid; grid-template-columns: 56px 1fr; gap: 14px; align-items: center; }
-.avatar { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 30px;
-          background: radial-gradient(circle at 35% 30%, #5d8590, #2b4852 70%); color: #f2efe4;
-          box-shadow: inset 0 0 0 2px #ffffff22; font-family: "Segoe UI Symbol", "DejaVu Sans", sans-serif; }
-.avatar.hall { background: radial-gradient(circle at 35% 30%, #f0c768, #9a6a1c 70%); color: #25190a; }
-.who h1 { font: 600 1.45rem/1.1 var(--serif); margin: 0; }
-.who p { margin: 4px 0 0; color: var(--muted); font-size: .9rem; }
-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-legend { padding: 0; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
-.seg { display: flex; flex-wrap: wrap; gap: 6px; }
-.seg button { background: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
-              cursor: pointer; font-size: .9rem; }
-.seg button[aria-checked="true"] { background: var(--text); color: var(--ink); border-color: var(--text); font-weight: 600; }
-.seg button:disabled { opacity: .5; cursor: not-allowed; }
-.seg button.reveal { animation: reveal 1.1s ease-out 1; }
-@keyframes reveal { 0% { box-shadow: 0 0 0 0 var(--amber); transform: scale(.9); }
-                    40% { box-shadow: 0 0 0 10px #e0a43a00; transform: scale(1.08); } 100% { transform: scale(1); } }
-.hint { color: var(--muted); font-size: .82rem; margin: 6px 0 0; }
-
-.chat { background: var(--slate); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
-        display: grid; gap: 10px; max-height: 280px; overflow-y: auto; scroll-behavior: smooth; }
-.msg { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; align-items: start; }
-.mini { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 16px; color: #f2efe4;
-        background: radial-gradient(circle at 35% 30%, #5d8590, #2b4852 70%); margin-top: 2px;
-        font-family: "Segoe UI Symbol", "DejaVu Sans", sans-serif; }
-.mini.hall { background: radial-gradient(circle at 35% 30%, #f0c768, #9a6a1c 70%); color: #25190a; }
-.msg.old .mini { opacity: .55; }
-.bubble { background: var(--ink); border: 1px solid var(--line); border-radius: 4px 14px 14px 14px; padding: 10px 13px;
-          font: 1.02rem/1.4 var(--serif); max-width: 94%; }
-.bubble.old { color: var(--muted); }
-.bubble.thinking { color: var(--muted); font-style: italic; }
-.bubble.verdict { border-color: var(--amber); background: #2a2415; font-family: var(--sans); font-size: .95rem; }
-.dots span { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--muted);
-             animation: blink 1.2s infinite both; }
-.dots span:nth-child(2) { animation-delay: .2s; } .dots span:nth-child(3) { animation-delay: .4s; }
-@keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
-
-.sheet { background: var(--paper); color: var(--paper-ink); border-radius: 6px; padding: 12px 14px 14px;
-         box-shadow: 0 10px 24px #0006; max-height: 300px; overflow-y: auto; }
-.sheet h2 { font: 600 1rem/1.2 var(--serif); margin: 0 0 8px; }
-.sheet table { width: 100%; border-collapse: collapse; font: 1rem/1.9 var(--serif); font-variant-numeric: tabular-nums; }
-.sheet td { border-bottom: 1px solid var(--paper-rule); padding: 0 6px; }
-.sheet td.n { width: 2.4em; color: #61727d; text-align: right; }
-.sheet td.cur { background: #e0a43a55; font-weight: 700; }
-.sheet .empty { color: #61727d; font: italic 1rem var(--serif); }
-
-.toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 30px); opacity: 0; pointer-events: none;
-         background: var(--text); color: var(--ink); padding: 10px 16px; border-radius: 10px; max-width: min(92vw, 520px);
-         transition: opacity .25s, transform .25s; z-index: 10; }
-.toast.show { opacity: 1; transform: translate(-50%, 0); }
-.toast.err { background: #f3d5d1; color: #5a1710; }
-
-dialog { background: var(--slate); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-dialog::backdrop { background: #0009; }
-dialog .pick { display: flex; gap: 8px; margin-top: 10px; }
-dialog .pick button { font-size: 2.6rem; width: 70px; height: 70px; background: var(--sq-light); border: 0; border-radius: 8px;
-                      cursor: pointer; }
-
-@media (max-width: 900px) { .table { grid-template-columns: minmax(0, 1fr); padding: 14px 12px 30px; } }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%233f6670'/%3E%3Ctext x='32' y='47' font-size='44' text-anchor='middle' fill='%23fbf8ef'%3E%E2%99%9E%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+<noscript><p class="noscript">This page needs JavaScript to show the board.</p></noscript>
 <main class="table">
   <section class="board-col" aria-label="Board">
-    <div class="captured" id="capTop"></div>
+    <div class="topline">
+      <div class="statusbox">
+        <p class="status" id="status" role="status"></p>
+        <p class="opening" id="opening" hidden></p>
+      </div>
+      <div class="captured" id="capTop"></div>
+    </div>
     <div class="board" id="board" role="group" aria-label="Chess board"></div>
     <div class="captured" id="capBottom"></div>
+    <nav class="nav" aria-label="Move through the game">
+      <button type="button" id="navFirst" aria-label="First position" title="First position (Home)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 6l-7 6 7 6M12 6l-7 6 7 6"/></svg></button>
+      <button type="button" id="navPrev" aria-label="Previous move" title="Previous move (Left arrow)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <button type="button" id="navHint" class="hint-btn" aria-pressed="false" title="Show the engine's best move" hidden>Hint</button>
+      <button type="button" id="navNext" aria-label="Next move" title="Next move (Right arrow)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+      <button type="button" id="navLast" aria-label="Back to the game" title="Back to the game (End)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M6 6l7 6-7 6M12 6l7 6-7 6"/></svg></button>
+    </nav>
     <div class="controls">
       <button class="btn primary" id="newBtn">New game</button>
       <button class="btn" id="undoBtn">Take back</button>
@@ -157,27 +42,35 @@ dialog .pick button { font-size: 2.6rem; width: 70px; height: 70px; background: 
       <div class="who">
         <div class="avatar" id="avatar" aria-hidden="true">&#9822;</div>
         <div><h1 id="botName">Echo</h1><p id="botBlurb"></p></div>
+        <button type="button" class="practice" id="practiceBtn" role="switch" aria-checked="false"
+                title="Signs on every move, a hint button, and a prompt to learn from mistakes">Practice</button>
       </div>
-      <fieldset>
-        <legend>Opponent</legend>
-        <div class="seg" id="botSeg" role="radiogroup" aria-label="Opponent"></div>
-      </fieldset>
-      <fieldset>
-        <legend>Strength</legend>
-        <div class="seg" id="dialSeg" role="radiogroup" aria-label="Strength">
-          <button role="radio" data-dial="faithful" title="Plays most like the profile; allows small inaccuracies">Faithful</button>
-          <button role="radio" data-dial="balanced" title="Profile style with fewer slips">Balanced</button>
-          <button role="radio" data-dial="sharp" title="Near-perfect play; style only breaks ties">Sharp</button>
+      <details class="settings" id="settings" open>
+        <summary><span>Game settings</span><span class="now" id="settingsNow"></span></summary>
+        <div class="settings-body">
+          <fieldset>
+            <legend>Opponent</legend>
+            <div class="seg" id="botSeg" role="radiogroup" aria-label="Opponent"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Strength</legend>
+            <div class="seg" id="dialSeg" role="radiogroup" aria-label="Strength">
+              <button role="radio" data-dial="faithful" title="Plays most like the profile; allows small inaccuracies">Faithful</button>
+              <button role="radio" data-dial="balanced" title="Profile style with fewer slips">Balanced</button>
+              <button role="radio" data-dial="sharp" title="Near-perfect play; style only breaks ties">Sharp</button>
+            </div>
+            <p class="hint" id="dialHint"></p>
+          </fieldset>
+          <fieldset>
+            <legend>You play</legend>
+            <div class="seg" id="colorSeg" role="radiogroup" aria-label="Your color">
+              <button role="radio" data-color="white">White</button>
+              <button role="radio" data-color="black">Black</button>
+            </div>
+            <p class="hint">Opponent, strength and color apply to the next new game.</p>
+          </fieldset>
         </div>
-      </fieldset>
-      <fieldset>
-        <legend>You play</legend>
-        <div class="seg" id="colorSeg" role="radiogroup" aria-label="Your color">
-          <button role="radio" data-color="white">White</button>
-          <button role="radio" data-color="black">Black</button>
-        </div>
-        <p class="hint">Opponent, strength and color apply to the next new game.</p>
-      </fieldset>
+      </details>
     </section>
 
     <section class="chat" id="chat" aria-live="polite" aria-label="Bot commentary"></section>
@@ -191,322 +84,16 @@ dialog .pick button { font-size: 2.6rem; width: 70px; height: 70px; background: 
 
 <div class="toast" id="toast" role="status"></div>
 <dialog id="promo"><div>Promote to</div><div class="pick" id="promoPick"></div></dialog>
+<dialog id="confirm">
+  <form method="dialog">
+    <p>Resign this game?</p>
+    <div class="actions">
+      <button class="btn" value="cancel">Keep playing</button>
+      <button class="btn primary" value="resign" id="confirmYes">Resign</button>
+    </div>
+  </form>
+</dialog>
 
-<script>
-"use strict";
-const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟︎" };
-const NAMES = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
-const FILES = "abcdefgh";
-const $ = (id) => document.getElementById(id);
-const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-let S = null;                     // latest server state
-let selected = null;              // square name
-let flipped = false;              // manual flip, on top of the human's color
-let busy = false;
-let want = { bot: "echo", dial: "balanced", color: "white" };
-let typed = "";
-let unlockTimer = null;
-let lastTypedShown = -1;          // chat index already typed out
-
-function toast(msg, err) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.className = "toast show" + (err ? " err" : "");
-  clearTimeout(toast.t);
-  toast.t = setTimeout(() => (t.className = "toast"), err ? 4200 : 2800);
-}
-
-async function api(path, body) {
-  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({ error: "unreadable reply" }));
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
-}
-
-function parseFen(fen) {
-  const map = {};
-  fen.split(" ")[0].split("/").forEach((row, i) => {
-    let f = 0;
-    for (const ch of row) {
-      if (/\d/.test(ch)) f += +ch;
-      else { map[FILES[f] + (8 - i)] = ch; f++; }
-    }
-  });
-  return map;
-}
-
-function orientation() { return (S.human === "w") !== flipped ? "w" : "b"; }
-
-function renderBoard() {
-  const pieces = parseFen(S.fen);
-  const o = orientation();
-  const targets = new Set(selected ? S.legal.filter((u) => u.startsWith(selected)).map((u) => u.slice(2, 4)) : []);
-  const board = $("board");
-  board.className = "board" + (busy || S.pending || S.result ? " locked" : "");
-  board.textContent = "";
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const file = o === "w" ? c : 7 - c;
-      const rank = o === "w" ? 8 - r : r + 1;
-      const name = FILES[file] + rank;
-      const ch = pieces[name];
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.dataset.sq = name;
-      btn.className = "sq" + ((file + rank) % 2 === 1 ? "" : " dark");
-      if (S.last && (S.last.slice(0, 2) === name || S.last.slice(2, 4) === name)) btn.classList.add("last");
-      if (selected === name) btn.classList.add("sel");
-      if (S.check === name) btn.classList.add("check");
-      if (targets.has(name)) btn.classList.add("target", ch ? "has-piece" : "empty");
-      if (c === 0) { const k = document.createElement("span"); k.className = "coord rank"; k.textContent = rank; btn.append(k); }
-      if (r === 7) { const k = document.createElement("span"); k.className = "coord file"; k.textContent = FILES[file]; btn.append(k); }
-      let label = name;
-      if (ch) {
-        const p = document.createElement("span");
-        const white = ch === ch.toUpperCase();
-        p.className = "piece " + (white ? "w" : "b");
-        p.textContent = GLYPH[ch.toLowerCase()];
-        btn.append(p);
-        label += ", " + (white ? "white " : "black ") + NAMES[ch.toLowerCase()];
-      }
-      btn.setAttribute("aria-label", label);
-      btn.addEventListener("click", () => onSquare(name));
-      board.append(btn);
-    }
-  }
-}
-
-function renderCaptured() {
-  const mk = (side) => {
-    const wrap = document.createElement("div");
-    wrap.className = "captured";
-    const row = document.createElement("span");
-    row.className = "row";
-    // pieces `side` has captured are of the other color
-    const cls = side === "w" ? "b" : "w";
-    row.innerHTML = S.captured[side].map((p) => `<span class="${cls}">${GLYPH[p]}</span>`).join("");
-    wrap.append(row);
-    const diff = (side === "w" ? 1 : -1) * S.material;
-    if (diff > 0) { const d = document.createElement("span"); d.textContent = "+" + diff; wrap.append(d); }
-    return wrap;
-  };
-  const o = orientation();
-  const top = o === "w" ? "b" : "w", bottom = o;
-  $("capTop").replaceChildren(...mk(top).childNodes);
-  $("capBottom").replaceChildren(...mk(bottom).childNodes);
-}
-
-function renderSheet() {
-  const box = $("sheet");
-  if (!S.san.length) { box.innerHTML = '<p class="empty">No moves yet.</p>'; return; }
-  let html = "<table><tbody>";
-  for (let i = 0; i < S.san.length; i += 2) {
-    const cell = (ply) => S.san[ply] === undefined ? "<td></td>" :
-      `<td class="${ply === S.san.length - 1 ? "cur" : ""}">${S.san[ply]}</td>`;
-    html += `<tr><td class="n">${i / 2 + 1}.</td>${cell(i)}${cell(i + 1)}</tr>`;
-  }
-  box.innerHTML = html + "</tbody></table>";
-  box.parentElement.scrollTop = box.parentElement.scrollHeight;
-}
-
-function typeOut(el, text) {
-  if (reduceMotion) { el.textContent = text; return; }
-  let i = 0;
-  el.textContent = "";
-  const tick = () => { el.textContent = text.slice(0, ++i); if (i < text.length) setTimeout(tick, 16); };
-  tick();
-}
-
-function renderChat() {
-  const chat = $("chat");
-  chat.textContent = "";
-  const n = S.chat.length;
-  const hall = S.bot.persona === "fischer";
-  const row = (b, old) => {
-    const m = document.createElement("div");
-    m.className = "msg" + (old ? " old" : "");
-    const a = document.createElement("span");
-    a.className = "mini" + (hall ? " hall" : "");
-    a.setAttribute("aria-hidden", "true");
-    a.innerHTML = hall ? "&#9812;" : "&#9822;";
-    m.append(a, b);
-    return m;
-  };
-  S.chat.forEach((c, i) => {
-    const b = document.createElement("div");
-    b.className = "bubble" + (i < n - 1 ? " old" : "");
-    if (i === n - 1 && i > lastTypedShown) { typeOut(b, c.text); lastTypedShown = i; } else b.textContent = c.text;
-    chat.append(row(b, i < n - 1));
-  });
-  if (S.result) {
-    const v = document.createElement("div");
-    v.className = "bubble verdict";
-    const humanWhite = S.human === "w";
-    const won = (S.result === "1-0") === humanWhite && S.result !== "1/2-1/2";
-    v.textContent = S.result === "1/2-1/2" ? "Draw." : won ? "You won." : S.bot.name + " won.";
-    if (S.saved) v.textContent += " Game saved to " + S.saved + ".";
-    chat.append(row(v, false));
-  } else if (busy || S.pending) {
-    const t = document.createElement("div");
-    t.className = "bubble thinking";
-    t.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>';
-    chat.append(row(t, false));
-  }
-  chat.scrollTop = chat.scrollHeight;
-}
-
-function segSet(id, attr, value) {
-  document.querySelectorAll(`#${id} button`).forEach((b) => b.setAttribute("aria-checked", String(b.dataset[attr] === value)));
-}
-
-function renderBots(reveal) {
-  const seg = $("botSeg");
-  seg.textContent = "";
-  S.bots.forEach((b) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("role", "radio");
-    btn.dataset.bot = b.id;
-    btn.textContent = b.name;
-    btn.disabled = !b.available;
-    btn.title = b.available ? b.blurb : b.note;
-    if (reveal && b.id === reveal) btn.classList.add("reveal");
-    btn.addEventListener("click", () => { want.bot = b.id; want.dial = b.id === "fischer" ? "sharp" : want.dial; segSet("botSeg", "bot", want.bot); segSet("dialSeg", "dial", want.dial); });
-    seg.append(btn);
-  });
-  segSet("botSeg", "bot", want.bot);
-}
-
-function renderOpponent() {
-  const b = S.bot;
-  $("botName").textContent = b.name;
-  $("botBlurb").textContent = b.blurb;
-  const hall = b.persona === "fischer";
-  document.body.classList.toggle("theme-hall", hall);
-  const av = $("avatar");
-  av.classList.toggle("hall", hall);
-  av.innerHTML = hall ? "&#9812;" : "&#9822;";
-}
-
-function renderControls() {
-  $("undoBtn").disabled = busy || (!S.result && S.san.length < (S.human === S.turn ? 2 : 1)) || (S.result && !S.resigned);
-  $("resignBtn").disabled = !!S.result || busy;
-  segSet("dialSeg", "dial", want.dial);
-  segSet("colorSeg", "color", want.color);
-}
-
-function render(reveal) {
-  renderOpponent(); renderBoard(); renderCaptured(); renderSheet(); renderChat(); renderBots(reveal); renderControls();
-}
-
-async function afterState(state) {
-  S = state;
-  selected = null;
-  render();
-  if (S.pending) {
-    busy = true; render();
-    try { S = await api("/api/reply", {}); } catch (e) { toast(e.message, true); }
-    busy = false; selected = null; render();
-  }
-}
-
-async function onSquare(name) {
-  if (!S || busy || S.pending || S.result) return;
-  const pieces = parseFen(S.fen);
-  if (selected) {
-    const moves = S.legal.filter((u) => u.slice(0, 2) === selected && u.slice(2, 4) === name);
-    if (moves.length === 1) return sendMove(moves[0]);
-    if (moves.length > 1) return askPromotion(moves);
-  }
-  const ch = pieces[name];
-  const mine = ch && ((ch === ch.toUpperCase()) === (S.human === "w"));
-  selected = mine && S.legal.some((u) => u.startsWith(name)) && selected !== name ? name : null;
-  renderBoard();
-}
-
-function askPromotion(moves) {
-  const dlg = $("promo"), pick = $("promoPick");
-  pick.textContent = "";
-  ["q", "r", "b", "n"].forEach((p) => {
-    const uci = moves.find((m) => m[4] === p);
-    if (!uci) return;
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = GLYPH[p]; b.setAttribute("aria-label", NAMES[p]);
-    b.style.color = S.human === "w" ? "#fbf8ef" : "#1c242b";
-    b.style.webkitTextStroke = S.human === "w" ? "1.3px #1f262c" : "1px #0b0f13";
-    b.addEventListener("click", () => { dlg.close(); sendMove(uci); });
-    pick.append(b);
-  });
-  dlg.showModal();
-}
-
-async function sendMove(uci) {
-  busy = true;
-  let next = null;
-  try { next = await api("/api/move", { uci }); } catch (e) { toast(e.message, true); selected = null; }
-  busy = false;
-  if (next) await afterState(next); else render();
-}
-
-async function newGame() {
-  busy = true;
-  let next = null;
-  try { lastTypedShown = -1; next = await api("/api/new", want); } catch (e) { toast(e.message, true); }
-  busy = false;
-  if (next) await afterState(next); else render();
-}
-
-$("newBtn").onclick = newGame;
-$("flipBtn").onclick = () => { flipped = !flipped; render(); };
-$("undoBtn").onclick = async () => { try { await afterState(await api("/api/undo", {})); } catch (e) { toast(e.message, true); } };
-$("resignBtn").onclick = async () => {
-  if (!confirm("Resign this game?")) return;
-  try { await afterState(await api("/api/resign", {})); } catch (e) { toast(e.message, true); }
-};
-$("dialSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { want.dial = b.dataset.dial; renderControls(); } });
-$("colorSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { want.color = b.dataset.color; renderControls(); } });
-
-// ---- the hidden extra: type the right word anywhere on the page ----
-function tryUnlock() {
-  clearTimeout(unlockTimer);
-  unlockTimer = setTimeout(async () => {
-    if (typed.length < 4) return;
-    try {
-      const was = S && S.unlocked;
-      const r = await api("/api/unlock", { typed });
-      if (r.unlocked && !was) {
-        try { localStorage.setItem("echo.unlock", typed); } catch (_) { /* private mode */ }
-        S.bots = r.bots; S.unlocked = true;
-        renderBots("fischer");
-        const f = r.bots.find((b) => b.id === "fischer");
-        toast(f && f.available ? "A new opponent is waiting: Fischer." : "Unlocked: Fischer. " + (f ? f.note : ""));
-      }
-    } catch (_) { /* ignore: typing must never show errors */ }
-  }, 250);
-}
-addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
-  if (/^(input|textarea|select)$/i.test(document.activeElement && document.activeElement.tagName)) return;
-  typed = (typed + e.key.toLowerCase()).replace(/[^a-z0-9]/g, "").slice(-24);
-  tryUnlock();
-});
-
-(async function init() {
-  try {
-    let stored = null;
-    try { stored = localStorage.getItem("echo.unlock"); } catch (_) { /* ignore */ }
-    if (stored) await api("/api/unlock", { typed: stored }).catch(() => {});
-    S = await api("/api/state");
-    want.color = S.human === "w" ? "white" : "black";
-    want.dial = S.dial;
-    want.bot = S.bot.id;
-    lastTypedShown = S.chat.length - 1;
-    render();
-    if (S.pending) await afterState(S);
-  } catch (e) { toast("Could not reach the Echo server: " + e.message, true); }
-})();
-</script>
+<script src="/app.js" defer></script>
 </body>
 </html>

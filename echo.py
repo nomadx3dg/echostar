@@ -1063,8 +1063,12 @@ def ui_cmd(args):
     def make_echo(bot, dial):
         return Echo(engine, bot.brain, dial, args.depth)
 
+    import openings
+    book = openings.load()
+    if book is None:
+        print("data/openings.tsv not found: no opening names or Book signs in practice mode.")
     app = ui_server.GameApp(engine, make_echo, bots, args.save_dir, save=not args.no_save, movetime=args.movetime,
-                            seed=args.seed, save_fn=save_game)
+                            seed=args.seed, save_fn=save_game, openings=book)
     try:
         ui_server.serve(app, args.port, open_browser=not args.no_browser)
     finally:

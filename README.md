@@ -160,7 +160,9 @@ UCI options: `StylePath`, `StockfishPath`, `Dial`, `Band`, `Depth`, `Threads`, `
 ```
 echo.py                 Python prototype and trainer (learn, profile, fetch, play, export, maia-compare)
 commentary.py          chat-style bot commentary (used by `ui` and `play --chat`)
-ui_server.py            local web UI server; the page is ui/index.html (see docs/UI.md)
+review.py               practice-mode move signs (brilliant ... blunder), pure logic
+openings.py             opening names and Book positions from data/openings.tsv (CC0)
+ui_server.py            local web UI server; the page is ui/ (index.html, styles.css, app.js; see docs/UI.md)
 personality.py          behavior dimensions measured against a random legal move (see docs/PERSONALITY.md)
 rust/                   Rust port: model, features, Stockfish client, chooser, terminal play, UCI mode
 tests/                  Python tests (chooser tests use a fake engine, so Stockfish isn't required)
