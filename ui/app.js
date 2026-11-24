@@ -455,23 +455,49 @@ $("dialSeg").addEventListener("click", (e) => { const b = e.target.closest("butt
 $("colorSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { want.color = b.dataset.color; renderControls(); } });
 
 // ---- the hidden extra: type the right word anywhere on the page ----
+async function unlockWith(text) {
+  const was = S && S.unlocked;
+  const r = await api("/api/unlock", { typed: text });
+  if (r.unlocked && !was) {
+    try { localStorage.setItem("echo.unlock", text); } catch (_) { /* private mode */ }
+    S.bots = r.bots; S.unlocked = true;
+    renderBots("fischer");
+    const f = r.bots.find((b) => b.id === "fischer");
+    toast(f && f.available ? "A new opponent is waiting: Fischer." : "Unlocked: Fischer. " + (f ? f.note : ""));
+  }
+  return r.unlocked;
+}
 function tryUnlock() {
   clearTimeout(unlockTimer);
   unlockTimer = setTimeout(async () => {
     if (typed.length < 4) return;
-    try {
-      const was = S && S.unlocked;
-      const r = await api("/api/unlock", { typed });
-      if (r.unlocked && !was) {
-        try { localStorage.setItem("echo.unlock", typed); } catch (_) { /* private mode */ }
-        S.bots = r.bots; S.unlocked = true;
-        renderBots("fischer");
-        const f = r.bots.find((b) => b.id === "fischer");
-        toast(f && f.available ? "A new opponent is waiting: Fischer." : "Unlocked: Fischer. " + (f ? f.note : ""));
-      }
-    } catch (_) { /* ignore: typing must never show errors */ }
+    try { await unlockWith(typed); } catch (_) { /* ignore: typing must never show errors */ }
   }, 250);
 }
+
+// Phones have no keyboard events: tap the opponent's portrait five times to get a small box for the code.
+let taps = 0, tapTimer = null;
+$("avatar").addEventListener("click", () => {
+  taps += 1;
+  clearTimeout(tapTimer);
+  tapTimer = setTimeout(() => { taps = 0; }, 1500);
+  if (taps >= 5) {
+    taps = 0;
+    const dlg = $("code");
+    $("codeInput").value = "";
+    if (!dlg.open) dlg.showModal();
+    $("codeInput").focus();
+  }
+});
+$("codeForm").addEventListener("submit", async (e) => {
+  if (!e.submitter || e.submitter.value !== "go") return;
+  const text = $("codeInput").value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (text.length < 4) return;
+  try {
+    if (!(await unlockWith(text))) toast("Not that one.");
+  } catch (_) { toast("Not that one."); }
+});
+
 addEventListener("keydown", (e) => {
   if (e.key === "Escape" && selected && !document.querySelector("dialog[open]")) { selected = null; if (S) renderBoard(); return; }
   if (document.querySelector("dialog[open]")) return;

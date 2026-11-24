@@ -41,9 +41,10 @@ def unlock_matches(typed):
 
 
 class Bot:
-    def __init__(self, bot_id, name, blurb, persona, brain, dial, available=True, note=""):
+    def __init__(self, bot_id, name, blurb, persona, brain, dial, available=True, note="", unseal=None):
         self.id, self.name, self.blurb, self.persona = bot_id, name, blurb, persona
         self.brain, self.dial, self.available, self.note = brain, dial, available, note
+        self.unseal = unseal      # optional: typed text -> brain, for a model that ships sealed
 
     def public(self):
         return {"id": self.id, "name": self.name, "blurb": self.blurb, "available": self.available,
@@ -95,6 +96,11 @@ class GameApp:
         with self.lock:
             if unlock_matches(typed):
                 self.unlocked = True
+                for bot in self.bots.values():
+                    if bot.unseal and not bot.available:
+                        brain = bot.unseal(typed)
+                        if brain is not None:
+                            bot.brain, bot.available = brain, True
             return {"unlocked": self.unlocked, "bots": self.bot_list()}
 
     # -- game flow --------------------------------------------------------------------------------------------------

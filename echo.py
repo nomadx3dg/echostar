@@ -482,7 +482,7 @@ def learn(args):
 
 
 def load_model(path):
-    if not os.path.exists(path):
+    if not hasattr(path, "read") and not os.path.exists(path):      # a file path, or an open file (sealed profile)
         sys.exit(f"Style file not found: {path}. Create one first with: python echo.py learn <games.pgn> --player <name>")
     d = np.load(path, allow_pickle=False)
     meta = json.loads(str(d["meta"]))
@@ -1045,7 +1045,16 @@ def ui_cmd(args):
     brains = {"echo": StyleBrain(args.style)}
     if not args.style:
         print("No style file given: the Echo opponent will play as a plain engine.")
+    import sealed
     fischer_ok = os.path.exists(args.fischer_style)
+    sealed_path = os.path.join("data", "echo-extra.bin")
+    unseal = None
+    if not fischer_ok and os.path.exists(sealed_path):
+        def unseal(typed):                    # called when the right code is typed
+            import io
+            with open(sealed_path, "rb") as fh:
+                raw = sealed.unseal_suffixes(fh.read(), typed)
+            return StyleBrain(io.BytesIO(raw)) if raw else None
     brains["fischer"] = StyleBrain(args.fischer_style) if fischer_ok else StyleBrain(None)
     bots = {
         "echo": ui_server.Bot("echo", "Echo", "Plays your style, stays correct." if args.style else "A plain engine.",
@@ -1054,7 +1063,7 @@ def ui_cmd(args):
             "fischer", "Fischer", "A bot trained on Bobby Fischer's games. Not him; a style model.", "fischer",
             brains["fischer"], "sharp", available=fischer_ok,
             note=f"Train it first: python echo.py learn fischer.pgn --player \"Fischer, Robert James\" "
-                 f"--out {args.fischer_style}"),
+                 f"--out {args.fischer_style}", unseal=unseal),
     }
     engine = chess.engine.SimpleEngine.popen_uci(find_stockfish(args.stockfish))
     opts = {"Threads": args.threads, "Hash": args.hash}

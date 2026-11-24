@@ -94,6 +94,18 @@
   </form>
 </dialog>
 
+<dialog id="code">
+  <form method="dialog" id="codeForm" autocomplete="off">
+    <p>Got a code?</p>
+    <input type="text" id="codeInput" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false"
+           enterkeyhint="go" maxlength="40" aria-label="Code">
+    <div class="actions">
+      <button class="btn" value="cancel" formnovalidate>Close</button>
+      <button class="btn primary" value="go" id="codeGo">Go</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="/app.js" defer></script>
 </body>
 </html>

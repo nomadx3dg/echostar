@@ -47,18 +47,27 @@ Logic is in `review.py` and `openings.py`; it is pure and tested without an engi
 
 ## Hidden extra
 
-There is one hidden extra opponent that you unlock on the page. It plays from `profiles/fischer.npz` (change with
-`--fischer-style`). That file is not in the repository (`*.npz` is ignored): train it from your own copy of a player's
-games, see [FISCHER.md](FISCHER.md). Until it exists, the opponent shows a message with the training command instead of
-starting a game. It is a style model trained on that player's games; it is not the player, and its lines are written for
-this program, not quotes.
+There is one hidden extra opponent that you unlock on the page. On a computer, type the code anywhere on the page. On a
+phone, tap the opponent's portrait five times and enter the code in the box that opens.
+
+Its model can come in either of two forms:
+
+- `profiles/fischer.npz` (change with `--fischer-style`), a plain profile you trained yourself. `*.npz` is git-ignored.
+- `data/echo-extra.bin`, the same profile sealed under the code (`python tools/seal.py profiles/fischer.npz
+  data/echo-extra.bin`). This one is safe to commit: it is unreadable until the code is typed, and the server only
+  decrypts it in memory at that moment. The plain file wins if both exist.
+
+If neither exists, the opponent shows the training command instead of starting a game. It is a style model trained on that
+player's games; it is not the player, and its lines are written for this program, not quotes. Train it as described in
+[FISCHER.md](FISCHER.md).
 
 ## Safety notes
 
 - The server binds to `127.0.0.1` only and refuses POST requests that carry another site's `Origin`, so a web page you
   have open elsewhere cannot make moves in your game.
-- The unlock word is stored only as a SHA-256 hash. That keeps it out of a casual search of the source; it is an easter egg,
-  not access control.
+- The unlock word is stored only as a SHA-256 hash, and the sealed model is encrypted under it. That keeps both out of a
+  casual look at the repository; it is an easter egg, not access control. The code is short, so someone determined could
+  still guess it offline.
 - One game is kept in memory; restarting the server starts fresh.
 
 ## API (for tests and tinkering)

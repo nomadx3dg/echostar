@@ -74,6 +74,7 @@ button { font: inherit; color: inherit; }
 .avatar { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 30px;
           background: radial-gradient(circle at 35% 30%, #5d8590, #2b4852 70%); color: #f2efe4;
           box-shadow: inset 0 0 0 2px #ffffff22; font-family: "Segoe UI Symbol", "DejaVu Sans", sans-serif; }
+.avatar { touch-action: manipulation; -webkit-tap-highlight-color: transparent; user-select: none; }
 .avatar.hall { background: radial-gradient(circle at 35% 30%, #f0c768, #9a6a1c 70%); color: #25190a; }
 .who h1 { font: 600 1.45rem/1.1 var(--serif); margin: 0; }
 .who p { margin: 4px 0 0; color: var(--muted); font-size: .9rem; }
@@ -142,6 +143,8 @@ dialog .pick button { font-size: 2.6rem; width: 70px; height: 70px; background: 
 .bubble.verdict { display: grid; gap: 10px; justify-items: start; }
 .bubble.verdict .btn { padding: 6px 12px; }
 dialog form p { margin: 0 0 14px; font: 1.1rem/1.3 var(--serif); }
+dialog input { width: min(70vw, 280px); box-sizing: border-box; margin: 0 0 14px; padding: 10px 12px; font-size: 16px;
+               color: var(--text); background: var(--ink, #0003); border: 1px solid var(--line); border-radius: 8px; }
 dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 /* settings: always open on wide screens, a collapsible row on phones */
