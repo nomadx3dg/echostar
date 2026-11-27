@@ -207,6 +207,9 @@ dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
 .arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; }
 .arrow line { stroke: var(--arrow, #15781b); stroke-width: .17; stroke-linecap: round; opacity: .85; }
 .arrow polygon { fill: var(--arrow, #15781b); opacity: .85; }
+.arrow.mine { --arrow: #e8a317; }
+.arrow.preview { opacity: .6; }
+.board { -webkit-touch-callout: none; user-select: none; }
 
 .statusbox { min-width: 0; flex: 1; }
 .opening { margin: 2px 0 0; color: var(--muted); font: italic .88rem/1.3 var(--serif); white-space: nowrap; overflow: hidden;

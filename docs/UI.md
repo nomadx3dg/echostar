@@ -9,9 +9,12 @@ scoresheet. Click a piece, then a square. Needs Stockfish, like `play`.
 
 - **Opponent, strength, color:** chosen on the page; they apply to the next new game. Strength uses the same three dials
   as `play` (faithful, balanced, sharp).
-- **Commentary:** the bot reacts to captures, checks, castling, promotions, mate, and to swings in the evaluation
-  (your blunders and your good moves). It takes one shallow engine check per move to know which is which. The lines live
-  in `commentary.py`; add your own persona there.
+- **Commentary:** the bot reacts to captures, checks, castling, promotions, mate, sacrifices, and to swings in the
+  evaluation (your blunders, your good moves, and its own slips and finds). It remembers the game: a second blunder gets a
+  different remark, a change in material is announced once the exchanges settle, the opening is named once or twice, the
+  start of the endgame is noted, and a long quiet stretch gets a short remark about the phase. Lines can name the move
+  and the square. It takes one shallow engine check per move to know which is which. The lines live in `commentary.py`;
+  add your own persona there.
 - **Games are saved** to `games/` as PGN, as in `play`. Games against the plain Echo opponent carry your profile's player
   name, so `learn --resume` can learn from them. Games against any other opponent say "You" and are never labelled as the
   profile's player.
@@ -39,6 +42,10 @@ are shown above the board.
 right arrow keys, Home and End, and a tap on any move in the scoresheet all show earlier positions without changing the
 game. While you step back, a move that was an inaccuracy, mistake or blunder shows the better move as an arrow, the way
 Lichess's analysis board does.
+
+**Drawing your own arrows** (any mode): right-drag from one square to another on a computer, or press and hold a square
+for about half a second and then drag on a phone. Draw the same arrow again to remove it. A click on the board, a move, or
+stepping through the game clears them. They are yours only: nothing is sent to the server.
 
 How it works and what it cannot do: every position gets one shallow engine search (depth 10, two lines) as you play, so
 signs are only as good as that search; at that depth a few labels will be debatable. Brilliant and great are deliberately

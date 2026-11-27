@@ -190,7 +190,8 @@ class GameApp:
         self.reviews.append(review.classify(before, mv, a_before, a_after, book))
         named = self.openings.lookup(self.board) if self.openings else None
         self.trail.append(named or (self.trail[-1] if self.trail else None))
-        text = self.talk.on_move(before, mv, mover_is_bot, a_before["cp"], a_after["cp"])
+        text = self.talk.on_move(before, mv, mover_is_bot, a_before["cp"], a_after["cp"],
+                                opening=named[1] if named else None)
         if text:
             self.chat.append(self._line(len(self.board.move_stack), text, "bot"))
         self._finished()

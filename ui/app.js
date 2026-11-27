@@ -82,6 +82,76 @@ function arrowSvg(uci, cls, o) {
     `<polygon points="${f(x2)},${f(y2)} ${f(bx - uy * half)},${f(by + ux * half)} ${f(bx + uy * half)},${f(by - ux * half)}"/></g>`;
 }
 
+// Arrows you draw yourself: right-drag on a computer, press-and-hold then drag on a phone. Drawing the same arrow again
+// removes it, and a click on the board, a move, or stepping through the game clears them all.
+let drawn = [], drawnSig = "", draw = null, noClickUntil = 0;
+function sqAt(x, y) {
+  const el = document.elementFromPoint(x, y), b = el && el.closest ? el.closest(".sq") : null;
+  return b ? b.dataset.sq : null;
+}
+// Engine arrows (Hint, and the better move while stepping back) plus the ones you drew.
+function paintArrows() {
+  const board = $("board"), old = board.querySelector(".arrows");
+  if (old) old.remove();
+  if (!S) return;
+  const past = viewing(), ply = plyShown(), o = orientation();
+  const sig = S.fen + "|" + ply + "|" + past;
+  if (sig !== drawnSig) { drawn = []; drawnSig = sig; }
+  let arrows = "";
+  if (S.practice && !past && showHint && S.hint) arrows = arrowSvg(S.hint.uci, "hint", o);
+  const next = past && S.practice ? S.reviews[ply] : null;
+  if (next && BAD.has(next.label) && next.best) arrows = arrowSvg(next.best, "better", o);
+  for (const u of drawn) arrows += arrowSvg(u, "mine", o);
+  if (draw && draw.active && draw.to !== draw.from) arrows += arrowSvg(draw.from + draw.to, "mine preview", o);
+  if (!arrows) return;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "arrows");
+  svg.setAttribute("viewBox", "0 0 8 8");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = arrows;
+  board.append(svg);
+}
+function endDraw() {
+  if (draw) clearTimeout(draw.timer);
+  const d = draw;
+  draw = null;
+  if (d && d.active) paintArrows();
+  return d;
+}
+{
+  const boardEl = $("board");
+  boardEl.addEventListener("contextmenu", (e) => e.preventDefault());
+  boardEl.addEventListener("pointerdown", (e) => {
+    if (!S || (e.pointerType === "mouse" && e.button !== 2)) return;
+    const from = sqAt(e.clientX, e.clientY);
+    if (!from) return;
+    draw = { from, to: from, active: e.pointerType === "mouse", x: e.clientX, y: e.clientY };
+    if (draw.active) e.preventDefault();
+    else draw.timer = setTimeout(() => {
+      if (!draw) return;
+      draw.active = true;
+      if (navigator.vibrate) navigator.vibrate(12);
+    }, 380);
+  });
+  addEventListener("pointermove", (e) => {
+    if (!draw) return;
+    if (!draw.active) { if (Math.hypot(e.clientX - draw.x, e.clientY - draw.y) > 10) endDraw(); return; }
+    const to = sqAt(e.clientX, e.clientY);
+    if (to && to !== draw.to) { draw.to = to; paintArrows(); }
+  });
+  addEventListener("pointerup", (e) => {
+    const d = endDraw();
+    if (!d || !d.active) return;
+    if (e.pointerType !== "mouse") noClickUntil = performance.now() + 400;           // the touch that ends a drag must not also select a square
+    if (d.to === d.from) return;
+    const u = d.from + d.to, i = drawn.indexOf(u);
+    if (i >= 0) drawn.splice(i, 1); else drawn.push(u);
+    paintArrows();
+  });
+  addEventListener("pointercancel", () => { endDraw(); });
+  addEventListener("touchmove", (e) => { if (draw && draw.active && e.cancelable) e.preventDefault(); }, { passive: false });
+}
+
 function renderBoard() {
   const past = viewing(), ply = plyShown();
   const pieces = parseFen(past ? S.fens[ply] : S.fen);
@@ -127,23 +197,12 @@ function renderBoard() {
         label += ", last move: " + SIGNS[sign.label].name;
       }
       btn.setAttribute("aria-label", label);
-      btn.addEventListener("click", () => onSquare(name));
+      btn.addEventListener("click", () => { if (performance.now() < noClickUntil) return; if (drawn.length) { drawn = []; paintArrows(); }
+      onSquare(name); });
       board.append(btn);
     }
   }
-  // Arrows: the Hint button's best move now, or, while stepping back, the better move for a move that was not good.
-  let arrows = "";
-  if (S.practice && !past && showHint && S.hint) arrows = arrowSvg(S.hint.uci, "hint", o);
-  const next = past && S.practice ? S.reviews[ply] : null;
-  if (next && BAD.has(next.label) && next.best) arrows = arrowSvg(next.best, "better", o);
-  if (arrows) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("class", "arrows");
-    svg.setAttribute("viewBox", "0 0 8 8");
-    svg.setAttribute("aria-hidden", "true");
-    svg.innerHTML = arrows;
-    board.append(svg);
-  }
+  paintArrows();
   if (focusSq) { const again = board.querySelector(`[data-sq="${focusSq}"]`); if (again) again.focus(); }
 }
 
